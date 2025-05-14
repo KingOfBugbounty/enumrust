@@ -1,0 +1,14 @@
+[package]
+name = "enumrust"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+clap = { version = "4.1", features = ["derive"] }
+colored = "2"
+indicatif = "0.17"
+rand = "0.8"
+regex = "1"
+reqwest = { version = "0.11", features = ["blocking", "rustls-tls"] }
+scraper = "0.13"
+anyhow = "1"
