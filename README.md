@@ -113,7 +113,7 @@ This generates a folder `example.com` with:
 
 ## 🙏 Acknowledgements
 
-* [haktrails](https://github.com/projectdiscovery/haktrails) by ProjectDiscovery
+* [haktrails](https://github.com/hakluke/haktrails) by ProjectDiscovery
 * [tlsx](https://github.com/projectdiscovery/tlsx) by ProjectDiscovery
 * [dnsx](https://github.com/projectdiscovery/dnsx) by ProjectDiscovery
 * [masscan](https://github.com/robertdavidgraham/masscan) by Robert David Graham
