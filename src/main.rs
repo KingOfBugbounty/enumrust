@@ -76,13 +76,11 @@ fn main() -> anyhow::Result<()> {
     println!("[*] Validating open ports with httpx...");
     Command::new("sh")
         .arg("-c")
-        .arg(format!(r#"cat {} | awk '/open/ {{print $4 ":" $3}}' | httpx -silent -o {}"#, masscan_txt.display(), ports_txt.display()))
-        .status()?;
-    let ports_txt = base.join("ports.txt");
-    println!("[*] Validating open ports with httpx...");
-    Command::new("sh")
-        .arg("-c")
-        .arg(format!(r#"cat {} | awk '/open/ {{print $4 ":" $3}}' | httpx -silent -o {}"#, masscan_txt.display(), ports_txt.display()))
+        .arg(format!(
+            r#"cat {} | awk '/open/ {{print $4 ":" $3}}' | httpx -silent -o {}"#,
+            masscan_txt.display(),
+            ports_txt.display()
+        ))
         .status()?;
 
     // 4: resolve alive hosts via httpx
@@ -110,7 +108,7 @@ fn main() -> anyhow::Result<()> {
     let re_s3 = Regex::new(r"[a-z0-9\-]+\.s3\.amazonaws\.com")?;
     let re_comment_urls = Regex::new(r#"https?://[^"\s]+"#)?;
     let re_comments = Regex::new(r#"<!--([\s\S]*?)-->"#)?;
-    let re_hidden = Regex::new(r#"<input[^>]+name=('?\"?)([^"'>\s]+)("?'?)"#)?;
+    let re_hidden = Regex::new(r#"<input[^>]+name=('?"?)([^"'>\s]+)("?'?)"#)?;
 
     // HTTP client
     let client = Client::builder()
@@ -179,7 +177,22 @@ fn main() -> anyhow::Result<()> {
         ))
         .status()?;
 
-    println!("[*] Done. Results saved in \"{}\" directory. Files: subdomains.txt, masscan.txt, ports.txt, http200.txt, s3.txt, urls.txt, hiddenparams.txt, params.txt", domain);
+    // 9: fast vulnerability scanning with Nuclei
+    println!("[*] Running Nuclei scan (fast mode)...");
+    Command::new("sh")
+        .arg("-c")
+        .arg(format!(
+            "cat {} | nuclei -silent -etags ssl -l {} -c 100 -o {}",
+            http200_txt.display(),
+            http200_txt.display(),
+            base.join("nuclei.txt").display()
+        ))
+        .status()?;
+
+    println!(
+        "[*] Done. Results saved in \"{}\" directory. Files: subdomains.txt, masscan.txt, ports.txt, http200.txt, s3.txt, urls.txt, hiddenparams.txt, params.txt, nuclei.txt",
+        domain
+    );
     Ok(())
 }
 
