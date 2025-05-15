@@ -44,7 +44,7 @@ Ensure the following tools are in your `$PATH`:
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 
 # Clone repository
-git clone https://github.com/yourusername/enumrust.git
+git clone https://github.com/KingOfBugbounty/enumrust.git
 cd enumrust
 
 # Build binary
