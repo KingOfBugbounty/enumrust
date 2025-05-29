@@ -61,8 +61,6 @@ Below are commands to install dependencies on macOS 🍎 (Homebrew) and Debian/U
 # 🛠️ haktrails (ProjectDiscovery)
 # macOS 🍎
 brew install projectdiscovery/tap/haktrails
-or
-go install -v github.com/hakluke/haktrails@latest
 
 # 🔒 tlsx (ProjectDiscovery)
 go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest
