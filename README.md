@@ -86,6 +86,12 @@ go install github.com/projectdiscovery/httpx/cmd/httpx@latest
 
 # 🕵️ hakrawler (Hakluke)
 go install github.com/hakluke/hakrawler@latest
+
+# anew (tomnomnom)
+go install -v github.com/tomnomnom/anew@latest
+
+# subfinder (projectdiscovery)
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
 ```
 
 ---
