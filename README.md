@@ -46,7 +46,7 @@ It integrates top-tier tools like `subfinder`, `httpx`, `masscan`, `nuclei`, `ff
 The following tools must be installed and available in your `$PATH`:
 
 ```
-subfinder, anew, tlsx, jq, dnsx, masscan, httpx, hakrawler, nuclei, curl, feroxbuster, ffuf
+subfinder, anew, tlsx, jq, dnsx, masscan, httpx, hakrawler, nuclei, curl, feroxbuster, ffuf, haktrails
 ```
 
 You can check dependencies by running:
