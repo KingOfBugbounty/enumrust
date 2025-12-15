@@ -20,6 +20,7 @@
 - 🔍 **Web Crawling** - JavaScript analysis, endpoint discovery
 - 🚨 **Vulnerability Scanning** - Nuclei integration
 - 🗄️ **Infrastructure Mode** - Network scanning with IP ranges
+- 📊 **Real-time Dashboard** - Web UI with live progress tracking
 
 ### 🎯 Bug Bounty Mode (NEW!)
 - 🔍 **Admin Panel Discovery** - Scans 15 ports & 80+ admin paths
@@ -79,7 +80,7 @@
 
 ```bash
 # Clone repository
-git clone https://github.com/yourusername/enumrust.git
+git clone https://github.com/KingOfBugbounty/enumrust.git
 cd enumrust
 
 # Build release version
@@ -95,6 +96,55 @@ cargo build --release
 # Infrastructure scan with IP range
 ./target/release/enumrust --infraestrutura --ip-range 192.168.1.0/24 --vuln-scan
 ```
+
+### 3. Dashboard Mode
+
+```bash
+# Start dashboard on default port 8080
+./target/release/enumrust --dashboard
+
+# Start dashboard on custom port
+./target/release/enumrust --dashboard --dashboard-port 3000
+
+# Run scan with dashboard monitoring
+./target/release/enumrust -d target.com --subfinder --vuln-scan --dashboard
+```
+
+**First Access Setup:**
+```
+🚀 Dashboard server starting on http://0.0.0.0:8080
+📊 Access the dashboard and complete the initial setup
+   Setup Code: <random_16_char_code>
+```
+
+1. Open `http://localhost:8080` in your browser
+2. Use the **Setup Code** displayed in terminal (generated randomly each startup)
+3. Create your own username and password
+4. Login and start monitoring your scans
+
+---
+
+## 📊 Dashboard Features
+
+### Real-time Monitoring
+- **Progress Bar** - Animated, shows current scan phase
+- **Event Stream** - Live feed of tool execution
+- **Statistics Cards** - Vulnerability counts by severity
+
+### File Explorer
+- **Two-Panel Layout** - File list + content viewer
+- **Syntax Highlighting** - Terminal-style display
+- **Domain Filtering** - Select specific target to view
+
+### Vulnerability Management
+- **Severity Filters** - Critical, High, Medium, Low
+- **Detailed View** - Template ID, host, description
+- **Export Options** - JSON data for reporting
+
+### Security
+- **Random Credentials** - Setup code generated at each startup
+- **JWT Authentication** - Secure session management
+- **No Hardcoded Secrets** - All credentials created by user
 
 ---
 
@@ -250,7 +300,8 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 **OFJAAAH**
 
-- GitHub: [@yourusername](https://github.com/yourusername)
+- GitHub: [@ofjaaah](https://github.com/ofjaaah)
+- Twitter: [@oaborboleta](https://twitter.com/oaborboleta)
 
 ---
 
