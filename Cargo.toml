@@ -1,7 +1,11 @@
 [package]
 name = "enumrust"
-version = "0.1.0"
+version = "2.2.0"
 edition = "2021"
+description = "Advanced Security Scanner & Vulnerability Hunter"
+authors = ["OFJAAAH <ofjaaah@users.noreply.github.com>"]
+repository = "https://github.com/KingOfBugbounty/enumrust"
+license = "MIT"
 
 [dependencies]
 clap = { version = "4.1", features = ["derive"] }
