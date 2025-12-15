@@ -135,8 +135,7 @@ GET /api/domain/:domain/data       // Get domain-specific data
 ## 📝 Notes
 
 - **Breaking Changes**: None - backward compatible with v1.x scan results
-- **Credentials**: Default login remains `REMOVED_USER` / `REMOVED_PASS`
-- **Port**: Default dashboard port remains `8080`
+- **Security**: Credentials are now generated randomly at runtime
 
 ---
 

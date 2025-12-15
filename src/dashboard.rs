@@ -20,14 +20,25 @@ use crate::progress::{ProgressEvent, ProgressTracker};
 use crate::secrets_scanner::{HardcodedSecret, CloudStorageExposure};
 use crate::package_scanner::PackageDependency;
 use crate::ip_validator::ValidatedHost;
+use rand::Rng;
+use lazy_static::lazy_static;
 
-// JWT Secret - Trocar para produção
-const JWT_SECRET: &str = "REMOVED_SECRET";
+// Gerar JWT Secret e Setup Code aleatórios em tempo de execução
+lazy_static! {
+    static ref JWT_SECRET: String = generate_random_string(64);
+    static ref SETUP_CODE: String = generate_random_string(16);
+}
 
-// Credenciais padrão (apenas usadas no primeiro acesso se não houver config)
-#[allow(dead_code)]
-const DEFAULT_USERNAME: &str = "admin";
-const DEFAULT_SETUP_CODE: &str = "REMOVED_CODE";
+fn generate_random_string(length: usize) -> String {
+    const CHARSET: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut rng = rand::thread_rng();
+    (0..length)
+        .map(|_| {
+            let idx = rng.gen_range(0..CHARSET.len());
+            CHARSET[idx] as char
+        })
+        .collect()
+}
 
 // Custom error type for authentication to avoid large Result variant
 #[derive(Debug)]
@@ -2671,7 +2682,7 @@ async fn initial_setup(
     }
 
     // Validar setup code
-    if payload.setup_code != DEFAULT_SETUP_CODE {
+    if payload.setup_code != *SETUP_CODE {
         return Ok(Json(SetupResponse {
             success: false,
             message: "Invalid setup code".to_string(),
@@ -2933,7 +2944,7 @@ pub async fn start_dashboard_server(base_path: PathBuf, port: u16) -> anyhow::Re
 
     println!("🚀 Dashboard server starting on http://{}", addr);
     println!("📊 Access the dashboard and complete the initial setup");
-    println!("   Setup Code: {}", DEFAULT_SETUP_CODE);
+    println!("   Setup Code: {}", *SETUP_CODE);
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

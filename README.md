@@ -20,16 +20,6 @@
 - 🔍 **Web Crawling** - JavaScript analysis, endpoint discovery
 - 🚨 **Vulnerability Scanning** - Nuclei integration
 - 🗄️ **Infrastructure Mode** - Network scanning with IP ranges
-- 📊 **Real-time Dashboard** - Web UI with live progress tracking
-
-### Dashboard Features (v2.0)
-- 🎨 **Modern UI** - Green/Purple/Black/White color scheme
-- 📁 **File Explorer** - Browse scan results directly in browser
-- 🔍 **Domain Filtering** - Separate data by target domain
-- 📊 **Live Progress** - Real-time scan monitoring
-- 🚨 **Vulnerability View** - Filter by severity (Critical/High/Medium/Low)
-- 🔌 **Port Analysis** - View all open ports and services
-- 🔐 **JWT Authentication** - Secure access control
 
 ### 🎯 Bug Bounty Mode (NEW!)
 - 🔍 **Admin Panel Discovery** - Scans 15 ports & 80+ admin paths
@@ -106,20 +96,6 @@ cargo build --release
 ./target/release/enumrust --infraestrutura --ip-range 192.168.1.0/24 --vuln-scan
 ```
 
-### 3. Dashboard Mode
-
-```bash
-# Launch dashboard
-./run-dashboard.sh
-
-# Or manually:
-./target/release/enumrust --dashboard --dashboard-port 8080
-```
-
-**Access:** http://localhost:8080
-- **Username:** `REMOVED_USER`
-- **Password:** `REMOVED_PASS`
-
 ---
 
 ## 📖 Usage Examples
@@ -185,8 +161,7 @@ cargo build --release
 ./target/release/enumrust --infraestrutura \
   --ip-list production.txt \
   --full-port-scan \
-  --vuln-scan \
-  --dashboard-port 8080
+  --vuln-scan
 ```
 
 ---
@@ -213,25 +188,6 @@ example.com/
 ├── progress.jsonl          # Real-time progress log
 └── metrics.json            # Performance metrics
 ```
-
----
-
-## 🎨 Dashboard Features
-
-### Real-time Monitoring
-- **Progress Bar** - Animated, shows current scan phase
-- **Event Stream** - Live feed of tool execution
-- **Statistics Cards** - Vulnerability counts by severity
-
-### File Explorer
-- **Two-Panel Layout** - File list + content viewer
-- **Syntax Highlighting** - Terminal-style display
-- **Domain Filtering** - Select specific target to view
-
-### Vulnerability Management
-- **Severity Filters** - Critical, High, Medium, Low
-- **Detailed View** - Template ID, host, description
-- **Export Options** - JSON data for reporting
 
 ---
 
@@ -270,25 +226,8 @@ example.com/
 
 ## 🔒 Security
 
-- **JWT Authentication** - Dashboard access control
 - **Path Validation** - Prevents directory traversal
 - **Input Sanitization** - Command injection protection
-- **File Size Limits** - Prevents resource exhaustion
-
----
-
-## 📝 Configuration
-
-### Dashboard Credentials
-Edit `src/dashboard.rs`:
-```rust
-const VALID_USERNAME: &str = "your_username";
-const VALID_PASSWORD: &str = "your_password";
-```
-
-### Default Ports
-- Dashboard: `8080`
-- Can be changed with `--dashboard-port`
 
 ---
 
