@@ -1,1 +1,100 @@
+# Rust
 /target
+*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Credenciais e Configurações Sensíveis
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+.github_config.json
+.webhook_discord.txt
+.admin_config.json
+*_token.txt
+*_secret.txt
+*_credential.txt
+credentials.json
+config.json
+secrets.json
+
+# Resultados de Scans
+infrastructure_scans/
+*_scans/
+test_domain/
+*.scan
+scan_results/
+nuclei_output/
+
+# Scan outputs por domínio (*.com, *.com.br, etc.)
+*.com/
+*.com.br/
+*.net/
+*.org/
+*.io/
+*.dev/
+*.app/
+
+# TruffleHog checkpoints
+trufflehog_checkpoint*.json
+
+# Arquivos de teste e temporários
+test_*.json
+test_*.txt
+*.tmp
+*.temp
+temp/
+tmp/
+
+# Claude AI
+.claude/
+src/.claude/
+
+# Backups
+*.backup
+*.bak
+*.old
+*~
+
+# Build artifacts
+dist/
+build/
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Cache
+.cache/
+*.cache
+
+# OS
+Thumbs.db
+desktop.ini
+
+# Dados de banco de dados locais
+*.db
+*.sqlite
+*.sqlite3
+
+# Arquivos grandes de wordlists (opcional, descomentar se necessário)
+# *.txt
+
+# Node modules (se houver frontend com npm)
+node_modules/

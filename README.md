@@ -1,130 +1,331 @@
-# 🚀 Subdomain Enumerator and Simple Crawler
+# 🛡️ EnumRust - Advanced Security Scanner
 
-A comprehensive Rust-based tool to:
+<div align="center">
 
-* 🕵️‍♂️ **Enumerate subdomains** with **haktrails**
-* 🔐 **Augment with TLS certificate SANs** via **tlsx**
-* 🌐 **Resolve to IPs** using **dnsx**
-* ⚡ **Perform fast port scanning** with **masscan** and validate via **httpx**
-* 🕸️ **Crawl live hosts** to extract:
+**A comprehensive Rust-based security enumeration tool with real-time dashboard**
 
-  * 🪣 S3 bucket URLs
-  * 🔗 In-scope links (including HTML comments)
-  * 🔒 Hidden form parameters
-  * 🔍 Additional parameters via **hakrawler**
+[![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+
+</div>
 
 ---
 
 ## 🎯 Features
 
-1. 🚀 **Subdomain Enumeration**: `haktrails` + `anew` for deduplication
-2. 🧾 **Certificate SAN Extraction**: `tlsx -json -silent` + `jq`
-3. 🌐 **DNS Resolution**: `dnsx -a -resp-only -silent`
-4. 🔎 **Port Scanning**: `masscan` (1–65535, 10kpps)
-5. 🔍 **Port Validation**: `httpx -silent`
-6. 🕸️ **Web Crawling**:
+### Core Capabilities
+- 🕵️ **Subdomain Enumeration** - haktrails, subfinder, certificate transparency
+- 🌐 **DNS Resolution** - Fast IP resolution with dnsx
+- ⚡ **Port Scanning** - masscan for speed, httpx for validation
+- 🔍 **Web Crawling** - JavaScript analysis, endpoint discovery
+- 🚨 **Vulnerability Scanning** - Nuclei integration
+- 🗄️ **Infrastructure Mode** - Network scanning with IP ranges
+- 📊 **Real-time Dashboard** - Web UI with live progress tracking
 
-   * 🔍 Extract S3 buckets via regex
-   * 🔗 Grab `<a>` links & HTML comments
-   * 🔒 Find hidden form inputs
-   * 🏹 Use `hakrawler` for parameter enumeration
+### Dashboard Features (v2.0)
+- 🎨 **Modern UI** - Green/Purple/Black/White color scheme
+- 📁 **File Explorer** - Browse scan results directly in browser
+- 🔍 **Domain Filtering** - Separate data by target domain
+- 📊 **Live Progress** - Real-time scan monitoring
+- 🚨 **Vulnerability View** - Filter by severity (Critical/High/Medium/Low)
+- 🔌 **Port Analysis** - View all open ports and services
+- 🔐 **JWT Authentication** - Secure access control
+
+### 🎯 Bug Bounty Mode (NEW!)
+- 🔍 **Admin Panel Discovery** - Scans 15 ports & 80+ admin paths
+- 🔑 **Default Credential Testing** - Tests 40+ common username/password combinations
+- 🔔 **Discord Notifications** - Real-time alerts for critical findings
+- 🎯 **Multi-Auth Support** - Form-based, Basic Auth, API JSON
+- 💥 **Instant Alerts** - Valid credentials, secrets, vulnerabilities
+- 📊 **Detailed Reports** - JSON + TXT outputs for bug submissions
+
+👉 **[Full Bug Bounty Guide](BUGBOUNTY_MODE.md)**
 
 ---
 
-## 🛠️ Installation
+## 🆕 Recent Improvements (v2.2.0)
 
-Ensure the following tools are in your `$PATH`:
+### Advanced Secrets Scanner
+- **70+ Token Patterns** - GitHub (PAT, OAuth, App), AWS, GCP, Azure, Vercel, Stripe, Twilio, SendGrid, Slack, Discord, and more
+- **Token Validation** - Automatic validation against real APIs to confirm if secrets are active
+- **Code Context** - Shows exact line number and code snippet where secret was found
+- **Remediation Guidance** - Provides specific steps to fix each type of exposed secret
 
-> Rust, haktrails, tlsx, jq, dnsx, masscan, httpx, hakrawler
+### Cloud Storage Security Testing
+- **S3 Bucket Testing** - Tests for anonymous read/write/list permissions
+- **GCS & Azure Blob** - Multi-cloud storage exposure detection
+- **Risk Level Assessment** - Automatic severity classification
 
-### 🔧 Rust and Dependencies
+### IP Validator & CDN Filter
+- **CDN Detection** - Automatically filters out IPs from Cloudflare, Akamai, Fastly, AWS CloudFront, Google Cloud CDN, Azure CDN, Incapsula
+- **Smart IP Validation** - Removes invalid IPs and duplicates from scan results
+- **False Positive Reduction** - Only scans real target infrastructure, not shared CDN IPs
+
+### Dependency Confusion Scanner
+- **NPM Package Detection** - Extracts packages from require(), import statements
+- **Public Registry Validation** - Checks if internal packages exist on public npm registry
+- **Dependency Confusion Alert** - Identifies potential supply chain attack vectors
+
+### Enhanced JavaScript Crawler
+- **Multi-source Collection** - Aggregates JS from URLFinder, HTTP200, DOM parsing
+- **Deep Secret Extraction** - Analyzes JavaScript content for hardcoded credentials
+- **API Endpoint Discovery** - Extracts REST/GraphQL endpoints from JS code
+
+### Admin Panel Discovery
+- **15 Port Scanning** - Covers ports 80, 443, 8080, 8443, 8000, 3000, 5000, 9000, 8888, 8088, 8081, 9090, 3001, 4200, 5001
+- **80+ Admin Paths** - WordPress, Joomla, Laravel, Django, phpMyAdmin, and more
+- **Smart Fingerprinting** - Identifies CMS type from response content
+
+### Credential Testing Engine
+- **40+ Default Credentials** - Common admin/password combinations
+- **Multi-Auth Support** - Form-based, HTTP Basic Auth, API JSON authentication
+- **Rate Limiting** - Built-in delays to avoid account lockouts
+
+---
+
+## 🚀 Quick Start
+
+### 1. Installation
 
 ```bash
-# Install Rust
-curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
-
 # Clone repository
-git clone https://github.com/KingOfBugbounty/enumrust.git
+git clone https://github.com/yourusername/enumrust.git
 cd enumrust
 
-# Build binary
+# Build release version
 cargo build --release
 ```
 
-### ⚙️ External Tools
-
-Below are commands to install dependencies on macOS 🍎 (Homebrew) and Debian/Ubuntu 🐧:
+### 2. Basic Scan
 
 ```bash
-# 🛠️ haktrails (ProjectDiscovery)
-# macOS 🍎
-brew install projectdiscovery/tap/haktrails
-# Debian/Ubuntu 🐧
-sudo apt-get update && sudo apt-get install -y haktrails
+# Domain enumeration with vulnerability scan
+./target/release/enumrust -d example.com --subfinder --vuln-scan
 
-# 🔒 tlsx (ProjectDiscovery)
-go install github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+# Infrastructure scan with IP range
+./target/release/enumrust --infraestrutura --ip-range 192.168.1.0/24 --vuln-scan
+```
 
-# 🛠️ jq (JSON processor)
-# macOS 🍎
-brew install jq
-# Debian/Ubuntu 🐧
-sudo apt-get install -y jq
+### 3. Dashboard Mode
 
-# 🌐 dnsx (ProjectDiscovery)
-go install github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+```bash
+# Launch dashboard
+./run-dashboard.sh
 
-# ⚡ masscan (fast port scanner)
-# macOS 🍎
-brew install masscan
-# Debian/Ubuntu 🐧
-sudo apt-get install -y masscan
+# Or manually:
+./target/release/enumrust --dashboard --dashboard-port 8080
+```
 
-# 🔍 httpx (ProjectDiscovery)
-go install github.com/projectdiscovery/httpx/cmd/httpx@latest
+**Access:** http://localhost:8080
+- **Username:** `REMOVED_USER`
+- **Password:** `REMOVED_PASS`
 
-# 🕵️ hakrawler (Hakluke)
-go install github.com/hakluke/hakrawler@latest
+---
+
+## 📖 Usage Examples
+
+### Bug Bounty Mode 🎯
+```bash
+# Bug bounty scan with Discord notifications
+./target/release/enumrust -d target.com \
+  --bugbounty \
+  --discord-webhook "https://discord.com/api/webhooks/YOUR_WEBHOOK"
+
+# Aggressive bug bounty scan
+./target/release/enumrust -d target.com \
+  --bugbounty \
+  --full-scan \
+  --workers 20 \
+  --discord-webhook "https://discord.com/api/webhooks/YOUR_WEBHOOK"
+```
+
+**What it does:**
+- ✅ Discovers admin panels on 15 different ports
+- ✅ Tests 40+ default credentials automatically
+- ✅ Sends Discord alerts for valid credentials found
+- ✅ Notifies about critical vulnerabilities & secrets
+- ✅ Generates detailed reports for bug submissions
+
+👉 **See [BUGBOUNTY_MODE.md](BUGBOUNTY_MODE.md) for complete guide**
+
+### Domain Reconnaissance
+```bash
+# Full enumeration with all sources
+./target/release/enumrust -d target.com \
+  --whois \
+  --subfinder \
+  --hacktrails \
+  --vuln-scan
+
+# Quick scan with specific tools
+./target/release/enumrust -d target.com --subfinder --vuln-scan
+```
+
+### Infrastructure Scanning
+```bash
+# Single IP
+./target/release/enumrust --infraestrutura --ip-range 192.168.1.100
+
+# CIDR notation
+./target/release/enumrust --infraestrutura --ip-range 192.168.1.0/24
+
+# IP range
+./target/release/enumrust --infraestrutura --ip-range 192.168.1.1-192.168.1.254
+
+# Comma-separated IPs
+./target/release/enumrust --infraestrutura --ip-range 192.168.1.1,192.168.1.5,192.168.1.10
+
+# From file
+./target/release/enumrust --infraestrutura --ip-list targets.txt --vuln-scan
+```
+
+### Advanced Options
+```bash
+# Full port scan with vulnerability detection
+./target/release/enumrust --infraestrutura \
+  --ip-list production.txt \
+  --full-port-scan \
+  --vuln-scan \
+  --dashboard-port 8080
 ```
 
 ---
 
-## 🚀 Usage
+## 📂 Output Structure
 
-```bash
-./target/release/enumrust --domain example.com
+After scanning `example.com`, results are saved in:
+
 ```
-
-This generates a folder `example.com` with:
-
-| File               | Description                                 |
-| ------------------ | ------------------------------------------- |
-| `subdomains.txt`   | Enumerated and SAN-derived subdomains       |
-| `ips.txt`          | Resolved A records                          |
-| `masscan.txt`      | Raw masscan output                          |
-| `ports.txt`        | Validated open HTTP(S) ports                |
-| `http200.txt`      | Alive hosts via httpx                       |
-| `s3.txt`           | Discovered S3 buckets                       |
-| `urls.txt`         | Extracted URLs                              |
-| `hiddenparams.txt` | Generated hidden-input test URLs            |
-| `params.txt`       | Additional parameterized URLs via hakrawler |
+example.com/
+├── subdomains.txt          # Discovered subdomains
+├── ips.txt                 # Resolved IP addresses
+├── http200.txt             # Active HTTP(S) hosts
+├── masscan.txt             # Port scan results
+├── ports.txt               # Validated open ports
+├── nuclei.txt              # Vulnerability findings
+├── urls.txt                # Discovered URLs
+├── js_endpoints.txt        # JavaScript endpoints
+├── js_secrets.txt          # Potential secrets in JS
+├── s3.txt                  # S3 bucket URLs
+├── ferox_200_only.txt      # Directory bruteforce results
+├── all_results.txt         # Consolidated report
+├── current_status.json     # Scan status
+├── progress.jsonl          # Real-time progress log
+└── metrics.json            # Performance metrics
+```
 
 ---
 
-## 🙏 Acknowledgements
+## 🎨 Dashboard Features
 
-* [haktrails](https://github.com/hakluke/haktrails) by ProjectDiscovery
-* [tlsx](https://github.com/projectdiscovery/tlsx) by ProjectDiscovery
-* [dnsx](https://github.com/projectdiscovery/dnsx) by ProjectDiscovery
-* [masscan](https://github.com/robertdavidgraham/masscan) by Robert David Graham
-* [httpx](https://github.com/projectdiscovery/httpx) by ProjectDiscovery
-* [hakrawler](https://github.com/hakluke/hakrawler) by hakluke
-* [Clap](https://github.com/clap-rs/clap) for CLI parsing
-* [Reqwest](https://github.com/seanmonstar/reqwest)
-* [Scraper](https://github.com/causal-agent/scraper)
+### Real-time Monitoring
+- **Progress Bar** - Animated, shows current scan phase
+- **Event Stream** - Live feed of tool execution
+- **Statistics Cards** - Vulnerability counts by severity
+
+### File Explorer
+- **Two-Panel Layout** - File list + content viewer
+- **Syntax Highlighting** - Terminal-style display
+- **Domain Filtering** - Select specific target to view
+
+### Vulnerability Management
+- **Severity Filters** - Critical, High, Medium, Low
+- **Detailed View** - Template ID, host, description
+- **Export Options** - JSON data for reporting
+
+---
+
+## 🛠️ Dependencies
+
+### Required Tools
+- [haktrails](https://github.com/projectdiscovery/haktrails) - Subdomain discovery
+- [subfinder](https://github.com/projectdiscovery/subfinder) - Subdomain enumeration
+- [dnsx](https://github.com/projectdiscovery/dnsx) - DNS resolution
+- [masscan](https://github.com/robertdavidgraham/masscan) - Fast port scanner
+- [httpx](https://github.com/projectdiscovery/httpx) - HTTP toolkit
+- [nuclei](https://github.com/projectdiscovery/nuclei) - Vulnerability scanner
+- [feroxbuster](https://github.com/epi052/feroxbuster) - Directory bruteforce
+
+### Installation Script
+```bash
+# Install all dependencies
+./target/release/enumrust --install-tools
+```
+
+---
+
+## 📊 Performance
+
+- **Concurrent Scanning** - Parallel tool execution
+- **Async I/O** - Non-blocking operations
+- **Resource Management** - Automatic cleanup
+- **Timeout Handling** - Prevents hanging scans
+
+**Typical Scan Times:**
+- Small domain (< 10 subdomains): 2-5 minutes
+- Medium domain (10-50 subdomains): 5-15 minutes
+- Large domain (> 50 subdomains): 15-30 minutes
+
+---
+
+## 🔒 Security
+
+- **JWT Authentication** - Dashboard access control
+- **Path Validation** - Prevents directory traversal
+- **Input Sanitization** - Command injection protection
+- **File Size Limits** - Prevents resource exhaustion
+
+---
+
+## 📝 Configuration
+
+### Dashboard Credentials
+Edit `src/dashboard.rs`:
+```rust
+const VALID_USERNAME: &str = "your_username";
+const VALID_PASSWORD: &str = "your_password";
+```
+
+### Default Ports
+- Dashboard: `8080`
+- Can be changed with `--dashboard-port`
+
+---
+
+## 🤝 Contributing
+
+Contributions are welcome! Please:
+1. Fork the repository
+2. Create a feature branch
+3. Submit a pull request
 
 ---
 
 ## 📄 License
 
-MIT License. See [LICENSE](LICENSE) for details.
+MIT License - see [LICENSE](LICENSE) for details.
+
+---
+
+## 👤 Author
+
+**OFJAAAH**
+
+- GitHub: [@yourusername](https://github.com/yourusername)
+
+---
+
+## 🙏 Acknowledgments
+
+Built with amazing tools from:
+- [ProjectDiscovery](https://projectdiscovery.io/)
+- [Hakluke](https://github.com/hakluke)
+- [EPI052](https://github.com/epi052)
+
+---
+
+<div align="center">
+
+**Made with ❤️ and Rust 🦀**
+
+</div>

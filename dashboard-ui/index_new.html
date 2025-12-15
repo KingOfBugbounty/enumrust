@@ -1,0 +1,1191 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>EnumRust Security Dashboard v2.0 - Enhanced Cloud Storage</title>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary-green: #10b981;
+            --primary-purple: #9333ea;
+            --primary-blue: #3b82f6;
+            --primary-red: #ef4444;
+            --primary-yellow: #f59e0b;
+            --primary-orange: #f97316;
+            --dark-bg: #0f172a;
+            --darker-bg: #020617;
+            --card-bg: #1e293b;
+            --card-hover: #334155;
+            --text-white: #ffffff;
+            --text-gray: #94a3b8;
+            --border-color: #334155;
+            --hover-bg: #475569;
+            --success: #22c55e;
+            --warning: #eab308;
+            --danger: #dc2626;
+            --info: #0ea5e9;
+        }
+
+        @keyframes slideInUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideInRight {
+            from {
+                opacity: 0;
+                transform: translateX(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes pulse {
+            0%, 100% {
+                opacity: 1;
+            }
+            50% {
+                opacity: 0.8;
+                transform: scale(1.02);
+            }
+        }
+
+        @keyframes glow {
+            0%, 100% {
+                box-shadow: 0 0 20px rgba(16, 185, 129, 0.3);
+            }
+            50% {
+                box-shadow: 0 0 40px rgba(16, 185, 129, 0.5);
+            }
+        }
+
+        @keyframes shimmer {
+            0% {
+                background-position: -1000px 0;
+            }
+            100% {
+                background-position: 1000px 0;
+            }
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            background: var(--darker-bg);
+            color: var(--text-white);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Login Styles */
+        .login-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            padding: 20px;
+            background: linear-gradient(135deg, var(--darker-bg) 0%, var(--dark-bg) 100%);
+        }
+
+        .login-box {
+            background: var(--card-bg);
+            padding: 50px;
+            border-radius: 20px;
+            border: 2px solid var(--primary-green);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5), 0 0 40px rgba(16, 185, 129, 0.2);
+            width: 100%;
+            max-width: 450px;
+            animation: slideInUp 0.6s ease;
+        }
+
+        .login-logo {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+
+        .login-logo i {
+            font-size: 60px;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .login-box h1 {
+            text-align: center;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+            font-size: 32px;
+            font-weight: 700;
+        }
+
+        .login-subtitle {
+            text-align: center;
+            color: var(--text-gray);
+            margin-bottom: 40px;
+            font-size: 14px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: block;
+            margin-bottom: 10px;
+            color: var(--primary-green);
+            font-weight: 600;
+            font-size: 14px;
+        }
+
+        .form-group input, .form-group select {
+            width: 100%;
+            padding: 14px 16px;
+            background: var(--dark-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 10px;
+            color: var(--text-white);
+            font-size: 15px;
+            transition: all 0.3s;
+        }
+
+        .form-group input:focus, .form-group select:focus {
+            outline: none;
+            border-color: var(--primary-green);
+            box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.1);
+        }
+
+        .btn-login {
+            width: 100%;
+            padding: 16px;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            border: none;
+            border-radius: 10px;
+            color: white;
+            font-size: 16px;
+            font-weight: 700;
+            cursor: pointer;
+            transition: all 0.3s;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .btn-login:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 30px rgba(16, 185, 129, 0.4);
+        }
+
+        .btn-login:active {
+            transform: translateY(0);
+        }
+
+        .error-message {
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid var(--danger);
+            color: var(--danger);
+            padding: 14px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            animation: slideInUp 0.3s ease;
+        }
+
+        .success-message {
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid var(--success);
+            color: var(--success);
+            padding: 14px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            animation: slideInUp 0.3s ease;
+        }
+
+        .info-message {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid var(--info);
+            color: var(--info);
+            padding: 14px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            line-height: 1.6;
+            animation: slideInUp 0.3s ease;
+        }
+
+        /* Dashboard Layout */
+        .dashboard-container {
+            display: flex;
+            min-height: 100vh;
+        }
+
+        /* Sidebar */
+        .sidebar {
+            width: 280px;
+            background: var(--card-bg);
+            border-right: 2px solid var(--border-color);
+            padding: 30px 20px;
+            position: fixed;
+            height: 100vh;
+            overflow-y: auto;
+            z-index: 100;
+            animation: slideInRight 0.5s ease;
+        }
+
+        .sidebar-header {
+            margin-bottom: 40px;
+            text-align: center;
+        }
+
+        .sidebar-logo {
+            font-size: 40px;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+
+        .sidebar-title {
+            font-size: 20px;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+        }
+
+        .sidebar-subtitle {
+            font-size: 12px;
+            color: var(--text-gray);
+            margin-top: 5px;
+        }
+
+        .domain-selector {
+            margin-bottom: 30px;
+        }
+
+        .domain-selector label {
+            display: block;
+            color: var(--text-gray);
+            font-size: 12px;
+            margin-bottom: 8px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 600;
+        }
+
+        .domain-selector select {
+            width: 100%;
+            padding: 12px;
+            background: var(--dark-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-white);
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+
+        .domain-selector select:focus {
+            outline: none;
+            border-color: var(--primary-green);
+        }
+
+        .nav-section {
+            margin-bottom: 30px;
+        }
+
+        .nav-section-title {
+            color: var(--text-gray);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-weight: 700;
+            margin-bottom: 15px;
+            padding-left: 10px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            padding: 12px 15px;
+            color: var(--text-gray);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-bottom: 5px;
+            font-size: 14px;
+            font-weight: 500;
+        }
+
+        .nav-item i {
+            margin-right: 12px;
+            font-size: 16px;
+            width: 20px;
+            text-align: center;
+        }
+
+        .nav-item:hover {
+            background: var(--hover-bg);
+            color: var(--text-white);
+            transform: translateX(5px);
+        }
+
+        .nav-item.active {
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            color: white;
+            font-weight: 600;
+        }
+
+        .nav-badge {
+            margin-left: auto;
+            background: var(--danger);
+            color: white;
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 11px;
+            font-weight: 700;
+        }
+
+        .sidebar-footer {
+            margin-top: auto;
+            padding-top: 30px;
+            border-top: 2px solid var(--border-color);
+        }
+
+        .user-info {
+            display: flex;
+            align-items: center;
+            padding: 12px;
+            background: var(--dark-bg);
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .user-avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin-right: 12px;
+            font-weight: 700;
+        }
+
+        .user-details {
+            flex: 1;
+        }
+
+        .user-name {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-white);
+        }
+
+        .user-role {
+            font-size: 11px;
+            color: var(--text-gray);
+        }
+
+        .btn-logout {
+            width: 100%;
+            padding: 12px;
+            background: rgba(239, 68, 68, 0.1);
+            border: 2px solid var(--danger);
+            border-radius: 8px;
+            color: var(--danger);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+        }
+
+        .btn-logout:hover {
+            background: var(--danger);
+            color: white;
+        }
+
+        /* Main Content */
+        .main-content {
+            margin-left: 280px;
+            flex: 1;
+            padding: 30px;
+            animation: slideInUp 0.5s ease;
+        }
+
+        /* Header */
+        .content-header {
+            margin-bottom: 30px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .header-title {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .header-title h2 {
+            font-size: 28px;
+            font-weight: 700;
+            color: var(--text-white);
+        }
+
+        .header-badge {
+            padding: 6px 14px;
+            background: linear-gradient(135deg, var(--primary-green), var(--primary-purple));
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 15px;
+        }
+
+        .btn-action {
+            padding: 10px 20px;
+            background: var(--card-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 8px;
+            color: var(--text-white);
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            font-size: 14px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-action:hover {
+            border-color: var(--primary-green);
+            background: var(--hover-bg);
+        }
+
+        .btn-action i {
+            font-size: 14px;
+        }
+
+        /* Data Card */
+        .data-card {
+            background: var(--card-bg);
+            border: 2px solid var(--border-color);
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 30px;
+            animation: slideInUp 0.5s ease;
+        }
+
+        .data-card-header {
+            padding: 20px 25px;
+            border-bottom: 2px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .data-card-title {
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--text-white);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .data-card-count {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--primary-green);
+            padding: 4px 12px;
+            border-radius: 12px;
+            font-size: 13px;
+            font-weight: 700;
+        }
+
+        /* Loading States */
+        .loading-container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+        }
+
+        .loading-spinner {
+            width: 50px;
+            height: 50px;
+            border: 4px solid var(--border-color);
+            border-top-color: var(--primary-green);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .loading-text {
+            margin-top: 20px;
+            color: var(--text-gray);
+            font-size: 14px;
+        }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 60px 20px;
+        }
+
+        .empty-icon {
+            font-size: 60px;
+            color: var(--text-gray);
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-text {
+            color: var(--text-gray);
+            font-size: 16px;
+            text-align: center;
+        }
+
+        /* Responsive */
+        @media (max-width: 1024px) {
+            .sidebar {
+                transform: translateX(-100%);
+                transition: transform 0.3s;
+            }
+
+            .sidebar.open {
+                transform: translateX(0);
+            }
+
+            .main-content {
+                margin-left: 0;
+            }
+        }
+
+        /* Scrollbar Styles */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--dark-bg);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 5px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--hover-bg);
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+
+        // Configuration
+        const API_URL = window.location.origin;
+
+        // Main App Component
+        function App() {
+            const [isAuthenticated, setIsAuthenticated] = useState(false);
+            const [setupCompleted, setSetupCompleted] = useState(null); // null = checking, true = completed, false = needs setup
+            const [token, setToken] = useState(null);
+            const [username, setUsername] = useState('');
+            const [loading, setLoading] = useState(true);
+
+            useEffect(() => {
+                checkSetupStatus();
+            }, []);
+
+            const checkSetupStatus = async () => {
+                try {
+                    // Check if user is already authenticated
+                    const savedToken = localStorage.getItem('authToken');
+                    const savedUsername = localStorage.getItem('username');
+
+                    if (savedToken) {
+                        setToken(savedToken);
+                        setUsername(savedUsername || 'Usuário');
+                        setIsAuthenticated(true);
+                        setSetupCompleted(true);
+                        setLoading(false);
+                        return;
+                    }
+
+                    // Check if initial setup is needed
+                    const response = await fetch(`${API_URL}/api/setup/status`);
+                    if (response.ok) {
+                        const data = await response.json();
+                        setSetupCompleted(data.setup_completed);
+                    } else {
+                        setSetupCompleted(false); // Assume setup is needed if check fails
+                    }
+                } catch (err) {
+                    console.error('Error checking setup status:', err);
+                    setSetupCompleted(false); // Assume setup is needed on error
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleSetupComplete = (authToken, user) => {
+                setToken(authToken);
+                setUsername(user);
+                setIsAuthenticated(true);
+                setSetupCompleted(true);
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('username', user);
+            };
+
+            const handleLogin = (authToken, user) => {
+                setToken(authToken);
+                setUsername(user);
+                setIsAuthenticated(true);
+                localStorage.setItem('authToken', authToken);
+                localStorage.setItem('username', user);
+            };
+
+            const handleLogout = () => {
+                setToken(null);
+                setUsername('');
+                setIsAuthenticated(false);
+                localStorage.removeItem('authToken');
+                localStorage.removeItem('username');
+            };
+
+            if (loading) {
+                return (
+                    <div className="login-container">
+                        <div className="loading-container">
+                            <div className="loading-spinner"></div>
+                            <div className="loading-text">Carregando...</div>
+                        </div>
+                    </div>
+                );
+            }
+
+            // Show setup page if setup not completed
+            if (!setupCompleted && !isAuthenticated) {
+                return <FirstAccessSetup onSetupComplete={handleSetupComplete} />;
+            }
+
+            // Show login page if not authenticated
+            if (!isAuthenticated) {
+                return <LoginPage onLogin={handleLogin} />;
+            }
+
+            // Show dashboard if authenticated
+            return <Dashboard token={token} username={username} onLogout={handleLogout} />;
+        }
+
+        // First Access Setup Component
+        function FirstAccessSetup({ onSetupComplete }) {
+            const [setupCode, setSetupCode] = useState('');
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [confirmPassword, setConfirmPassword] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError('');
+
+                // Validation
+                if (password !== confirmPassword) {
+                    setError('As senhas não coincidem');
+                    return;
+                }
+
+                if (password.length < 6) {
+                    setError('A senha deve ter pelo menos 6 caracteres');
+                    return;
+                }
+
+                if (username.length < 3) {
+                    setError('O nome de usuário deve ter pelo menos 3 caracteres');
+                    return;
+                }
+
+                setLoading(true);
+
+                try {
+                    const response = await fetch(`${API_URL}/api/setup/initial`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ setup_code: setupCode, username, password }),
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.success) {
+                        // Auto-login after successful setup
+                        const loginResponse = await fetch(`${API_URL}/api/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username, password }),
+                        });
+
+                        if (loginResponse.ok) {
+                            const loginData = await loginResponse.json();
+                            onSetupComplete(loginData.token, username);
+                        } else {
+                            setError('Usuário criado, mas falha no login automático. Tente fazer login manualmente.');
+                        }
+                    } else {
+                        setError(data.message || 'Erro ao configurar o sistema. Verifique o código de setup.');
+                    }
+                } catch (err) {
+                    setError('Erro ao conectar com o servidor. Tente novamente.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="login-container">
+                    <div className="login-box">
+                        <div className="login-logo">
+                            <i className="fas fa-rocket"></i>
+                        </div>
+                        <h1>Primeiro Acesso</h1>
+                        <div className="login-subtitle">Configure seu usuário administrador</div>
+
+                        <div className="info-message">
+                            <i className="fas fa-info-circle"></i>
+                            <div style={{marginTop: '8px'}}>
+                                <strong>Bem-vindo ao EnumRust!</strong><br/>
+                                Este é o primeiro acesso ao sistema. Configure suas credenciais de administrador para começar.<br/>
+                                <strong>Código de Setup padrão:</strong> <code style={{background: 'rgba(0,0,0,0.3)', padding: '2px 6px', borderRadius: '4px'}}>REMOVED_CODE</code>
+                            </div>
+                        </div>
+
+                        {error && <div className="error-message"><i className="fas fa-exclamation-triangle"></i> {error}</div>}
+
+                        <form onSubmit={handleSubmit}>
+                            <div className="form-group">
+                                <label><i className="fas fa-key"></i> Código de Setup</label>
+                                <input
+                                    type="text"
+                                    value={setupCode}
+                                    onChange={(e) => setSetupCode(e.target.value)}
+                                    placeholder="Digite o código de setup"
+                                    required
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label><i className="fas fa-user"></i> Nome de Usuário</label>
+                                <input
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    placeholder="Escolha um nome de usuário"
+                                    required
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label><i className="fas fa-lock"></i> Senha</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    placeholder="Escolha uma senha forte"
+                                    required
+                                />
+                            </div>
+
+                            <div className="form-group">
+                                <label><i className="fas fa-lock"></i> Confirmar Senha</label>
+                                <input
+                                    type="password"
+                                    value={confirmPassword}
+                                    onChange={(e) => setConfirmPassword(e.target.value)}
+                                    placeholder="Confirme sua senha"
+                                    required
+                                />
+                            </div>
+
+                            <button type="submit" className="btn-login" disabled={loading}>
+                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Configurando...</> : <><i className="fas fa-check"></i> Configurar Sistema</>}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // Login Component
+        function LoginPage({ onLogin }) {
+            const [username, setUsername] = useState('');
+            const [password, setPassword] = useState('');
+            const [error, setError] = useState('');
+            const [loading, setLoading] = useState(false);
+
+            const handleSubmit = async (e) => {
+                e.preventDefault();
+                setError('');
+                setLoading(true);
+
+                try {
+                    const response = await fetch(`${API_URL}/api/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password }),
+                    });
+
+                    if (response.ok) {
+                        const data = await response.json();
+                        onLogin(data.token, username);
+                    } else {
+                        setError('Credenciais inválidas. Verifique seu usuário e senha.');
+                    }
+                } catch (err) {
+                    setError('Erro ao conectar com o servidor. Tente novamente.');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <div className="login-container">
+                    <div className="login-box">
+                        <div className="login-logo">
+                            <i className="fas fa-shield-halved"></i>
+                        </div>
+                        <h1>EnumRust</h1>
+                        <div className="login-subtitle">Security Dashboard - Enterprise Edition</div>
+
+                        {error && <div className="error-message"><i className="fas fa-exclamation-triangle"></i> {error}</div>}
+
+                        <form onSubmit={handleSubmit}>
+                            <div className="form-group">
+                                <label><i className="fas fa-user"></i> Usuário</label>
+                                <input
+                                    type="text"
+                                    value={username}
+                                    onChange={(e) => setUsername(e.target.value)}
+                                    placeholder="Digite seu usuário"
+                                    required
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label><i className="fas fa-lock"></i> Senha</label>
+                                <input
+                                    type="password"
+                                    value={password}
+                                    onChange={(e) => setPassword(e.target.value)}
+                                    placeholder="Digite sua senha"
+                                    required
+                                />
+                            </div>
+                            <button type="submit" className="btn-login" disabled={loading}>
+                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Entrando...</> : <><i className="fas fa-sign-in-alt"></i> Entrar</>}
+                            </button>
+                        </form>
+                    </div>
+                </div>
+            );
+        }
+
+        // Dashboard Component (simplified for demonstration - you would keep all the existing tabs)
+        function Dashboard({ token, username, onLogout }) {
+            const [activeTab, setActiveTab] = useState('settings'); // Start on settings tab
+
+            return (
+                <div className="dashboard-container">
+                    <div className="sidebar">
+                        <div className="sidebar-header">
+                            <div className="sidebar-logo">
+                                <i className="fas fa-shield-halved"></i>
+                            </div>
+                            <div className="sidebar-title">EnumRust</div>
+                            <div className="sidebar-subtitle">Enterprise Security Platform</div>
+                        </div>
+
+                        <div className="nav-section">
+                            <div className="nav-section-title">Navegação</div>
+                            <div
+                                className={`nav-item ${activeTab === 'settings' ? 'active' : ''}`}
+                                onClick={() => setActiveTab('settings')}
+                            >
+                                <i className="fas fa-cog"></i>
+                                Configurações
+                            </div>
+                        </div>
+
+                        <div className="sidebar-footer">
+                            <div className="user-info">
+                                <div className="user-avatar">
+                                    {username.charAt(0).toUpperCase()}
+                                </div>
+                                <div className="user-details">
+                                    <div className="user-name">{username}</div>
+                                    <div className="user-role">Security Analyst</div>
+                                </div>
+                            </div>
+                            <button className="btn-logout" onClick={onLogout}>
+                                <i className="fas fa-sign-out-alt"></i> Sair
+                            </button>
+                        </div>
+                    </div>
+
+                    <div className="main-content">
+                        {activeTab === 'settings' && <SettingsTab token={token} username={username} />}
+                    </div>
+                </div>
+            );
+        }
+
+        // Settings Tab with Password Change
+        function SettingsTab({ token, username }) {
+            const [currentPassword, setCurrentPassword] = useState('');
+            const [newPassword, setNewPassword] = useState('');
+            const [confirmPassword, setConfirmPassword] = useState('');
+            const [message, setMessage] = useState('');
+            const [messageType, setMessageType] = useState(''); // 'success' or 'error'
+            const [loading, setLoading] = useState(false);
+
+            const handlePasswordChange = async (e) => {
+                e.preventDefault();
+                setMessage('');
+                setMessageType('');
+
+                // Validation
+                if (newPassword !== confirmPassword) {
+                    setMessage('As novas senhas não coincidem');
+                    setMessageType('error');
+                    return;
+                }
+
+                if (newPassword.length < 6) {
+                    setMessage('A nova senha deve ter pelo menos 6 caracteres');
+                    setMessageType('error');
+                    return;
+                }
+
+                if (currentPassword === newPassword) {
+                    setMessage('A nova senha deve ser diferente da senha atual');
+                    setMessageType('error');
+                    return;
+                }
+
+                setLoading(true);
+
+                try {
+                    const response = await fetch(`${API_URL}/api/auth/change-password`, {
+                        method: 'POST',
+                        headers: {
+                            'Authorization': `Bearer ${token}`,
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            current_password: currentPassword,
+                            new_password: newPassword,
+                        }),
+                    });
+
+                    const data = await response.json();
+
+                    if (response.ok && data.success) {
+                        setMessage('Senha alterada com sucesso!');
+                        setMessageType('success');
+                        setCurrentPassword('');
+                        setNewPassword('');
+                        setConfirmPassword('');
+                    } else {
+                        setMessage(data.message || 'Erro ao alterar senha. Verifique a senha atual.');
+                        setMessageType('error');
+                    }
+                } catch (err) {
+                    setMessage('Erro ao conectar com o servidor. Tente novamente.');
+                    setMessageType('error');
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            return (
+                <>
+                    <div className="content-header">
+                        <div className="header-title">
+                            <h2><i className="fas fa-cog"></i> Configurações do Sistema</h2>
+                        </div>
+                    </div>
+
+                    <div className="data-card" style={{marginBottom: '20px'}}>
+                        <div className="data-card-header">
+                            <div className="data-card-title">
+                                <i className="fas fa-user-shield"></i> Informações do Usuário
+                            </div>
+                        </div>
+                        <div style={{padding: '20px'}}>
+                            <div style={{
+                                padding: '20px',
+                                background: 'linear-gradient(135deg, rgba(16, 185, 129, 0.1) 0%, rgba(147, 51, 234, 0.1) 100%)',
+                                borderRadius: '12px',
+                                border: '2px solid rgba(16, 185, 129, 0.3)',
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '20px'
+                            }}>
+                                <div style={{
+                                    width: '80px',
+                                    height: '80px',
+                                    borderRadius: '50%',
+                                    background: 'linear-gradient(135deg, var(--primary-green), var(--primary-purple))',
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    fontSize: '36px',
+                                    fontWeight: '700',
+                                    color: 'white'
+                                }}>
+                                    {username.charAt(0).toUpperCase()}
+                                </div>
+                                <div>
+                                    <h3 style={{margin: '0 0 5px 0', fontSize: '24px', fontWeight: '700'}}>
+                                        {username}
+                                    </h3>
+                                    <p style={{margin: '0', color: 'var(--text-gray)', fontSize: '14px'}}>
+                                        <i className="fas fa-shield-alt"></i> Administrador do Sistema
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="data-card">
+                        <div className="data-card-header">
+                            <div className="data-card-title">
+                                <i className="fas fa-key"></i> Alterar Senha
+                            </div>
+                        </div>
+                        <div style={{padding: '20px'}}>
+                            <div style={{
+                                marginBottom: '20px',
+                                padding: '15px',
+                                backgroundColor: 'rgba(59, 130, 246, 0.1)',
+                                borderRadius: '8px',
+                                border: '1px solid rgba(59, 130, 246, 0.3)'
+                            }}>
+                                <p style={{margin: '0 0 10px 0', fontWeight: 'bold', color: '#3b82f6'}}>
+                                    <i className="fas fa-info-circle"></i> Segurança da Senha
+                                </p>
+                                <ul style={{margin: '0', paddingLeft: '20px', fontSize: '14px', lineHeight: '1.8'}}>
+                                    <li>Use uma senha forte com pelo menos 6 caracteres</li>
+                                    <li>Combine letras maiúsculas, minúsculas, números e símbolos</li>
+                                    <li>Não reutilize senhas de outros serviços</li>
+                                    <li>Altere sua senha regularmente</li>
+                                </ul>
+                            </div>
+
+                            {message && (
+                                <div className={messageType === 'success' ? 'success-message' : 'error-message'}>
+                                    <i className={`fas ${messageType === 'success' ? 'fa-check-circle' : 'fa-exclamation-triangle'}`}></i> {message}
+                                </div>
+                            )}
+
+                            <form onSubmit={handlePasswordChange}>
+                                <div className="form-group">
+                                    <label><i className="fas fa-lock"></i> Senha Atual</label>
+                                    <input
+                                        type="password"
+                                        value={currentPassword}
+                                        onChange={(e) => setCurrentPassword(e.target.value)}
+                                        placeholder="Digite sua senha atual"
+                                        required
+                                        style={{width: '100%'}}
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label><i className="fas fa-key"></i> Nova Senha</label>
+                                    <input
+                                        type="password"
+                                        value={newPassword}
+                                        onChange={(e) => setNewPassword(e.target.value)}
+                                        placeholder="Digite a nova senha"
+                                        required
+                                        style={{width: '100%'}}
+                                    />
+                                </div>
+
+                                <div className="form-group">
+                                    <label><i className="fas fa-key"></i> Confirmar Nova Senha</label>
+                                    <input
+                                        type="password"
+                                        value={confirmPassword}
+                                        onChange={(e) => setConfirmPassword(e.target.value)}
+                                        placeholder="Confirme a nova senha"
+                                        required
+                                        style={{width: '100%'}}
+                                    />
+                                </div>
+
+                                <button
+                                    type="submit"
+                                    className="btn-login"
+                                    disabled={loading}
+                                    style={{marginTop: '10px'}}
+                                >
+                                    {loading ? (
+                                        <><i className="fas fa-spinner fa-spin"></i> Alterando Senha...</>
+                                    ) : (
+                                        <><i className="fas fa-check"></i> Alterar Senha</>
+                                    )}
+                                </button>
+                            </form>
+                        </div>
+                    </div>
+                </>
+            );
+        }
+
+        // Render App
+        ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+</body>
+</html>
