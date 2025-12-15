@@ -2,10 +2,13 @@
 
 <div align="center">
 
+<img src="assets/banner.svg" width="700" alt="EnumRust Banner" />
+
 **A comprehensive Rust-based security enumeration tool with real-time dashboard**
 
 [![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+[![GitHub](https://img.shields.io/badge/GitHub-@ofjaaah-181717?style=for-the-badge&logo=github)](https://github.com/ofjaaah)
 
 </div>
 

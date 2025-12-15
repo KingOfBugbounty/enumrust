@@ -1,0 +1,104 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 400" width="800" height="400">
+  <defs>
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" style="stop-color:#0a0a0a;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#1a1a2e;stop-opacity:1" />
+    </linearGradient>
+    <linearGradient id="textGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" style="stop-color:#10b981;stop-opacity:1" />
+      <stop offset="50%" style="stop-color:#22d3ee;stop-opacity:1" />
+      <stop offset="100%" style="stop-color:#9333ea;stop-opacity:1" />
+    </linearGradient>
+    <filter id="glow">
+      <feGaussianBlur stdDeviation="3" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+    <filter id="shadow">
+      <feDropShadow dx="0" dy="4" stdDeviation="4" flood-color="#10b981" flood-opacity="0.3"/>
+    </filter>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="400" fill="url(#bgGrad)"/>
+
+  <!-- Grid pattern -->
+  <pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse">
+    <path d="M 40 0 L 0 0 0 40" fill="none" stroke="#10b981" stroke-width="0.3" opacity="0.2"/>
+  </pattern>
+  <rect width="800" height="400" fill="url(#grid)"/>
+
+  <!-- Scanning lines animation effect (static representation) -->
+  <line x1="0" y1="50" x2="800" y2="50" stroke="#10b981" stroke-width="1" opacity="0.1"/>
+  <line x1="0" y1="150" x2="800" y2="150" stroke="#10b981" stroke-width="1" opacity="0.15"/>
+  <line x1="0" y1="250" x2="800" y2="250" stroke="#10b981" stroke-width="1" opacity="0.1"/>
+  <line x1="0" y1="350" x2="800" y2="350" stroke="#10b981" stroke-width="1" opacity="0.15"/>
+
+  <!-- Main Title -->
+  <text x="400" y="100" font-family="monospace" font-size="72" font-weight="bold" fill="url(#textGrad)" text-anchor="middle" filter="url(#glow)">
+    EnumRust
+  </text>
+
+  <!-- Subtitle -->
+  <text x="400" y="150" font-family="monospace" font-size="18" fill="#9333ea" text-anchor="middle">
+    Advanced Security Scanner &amp; Vulnerability Hunter
+  </text>
+
+  <!-- Version badge -->
+  <rect x="340" y="165" width="120" height="24" rx="12" fill="#10b981" opacity="0.2"/>
+  <rect x="340" y="165" width="120" height="24" rx="12" fill="none" stroke="#10b981" stroke-width="1"/>
+  <text x="400" y="182" font-family="monospace" font-size="12" fill="#10b981" text-anchor="middle">v2.2.0</text>
+
+  <!-- Feature icons row -->
+  <g transform="translate(100, 220)">
+    <!-- Subdomain -->
+    <g filter="url(#shadow)">
+      <circle cx="50" cy="30" r="25" fill="#1a1a2e" stroke="#10b981" stroke-width="2"/>
+      <text x="50" y="38" font-size="24" text-anchor="middle">🔍</text>
+      <text x="50" y="75" font-family="monospace" font-size="11" fill="#c5c5c5" text-anchor="middle">Subdomains</text>
+    </g>
+
+    <!-- Ports -->
+    <g transform="translate(120, 0)" filter="url(#shadow)">
+      <circle cx="50" cy="30" r="25" fill="#1a1a2e" stroke="#22d3ee" stroke-width="2"/>
+      <text x="50" y="38" font-size="24" text-anchor="middle">⚡</text>
+      <text x="50" y="75" font-family="monospace" font-size="11" fill="#c5c5c5" text-anchor="middle">Port Scan</text>
+    </g>
+
+    <!-- Vulnerabilities -->
+    <g transform="translate(240, 0)" filter="url(#shadow)">
+      <circle cx="50" cy="30" r="25" fill="#1a1a2e" stroke="#ef4444" stroke-width="2"/>
+      <text x="50" y="38" font-size="24" text-anchor="middle">🚨</text>
+      <text x="50" y="75" font-family="monospace" font-size="11" fill="#c5c5c5" text-anchor="middle">Vuln Scan</text>
+    </g>
+
+    <!-- Secrets -->
+    <g transform="translate(360, 0)" filter="url(#shadow)">
+      <circle cx="50" cy="30" r="25" fill="#1a1a2e" stroke="#f59e0b" stroke-width="2"/>
+      <text x="50" y="38" font-size="24" text-anchor="middle">🔑</text>
+      <text x="50" y="75" font-family="monospace" font-size="11" fill="#c5c5c5" text-anchor="middle">Secrets</text>
+    </g>
+
+    <!-- Dashboard -->
+    <g transform="translate(480, 0)" filter="url(#shadow)">
+      <circle cx="50" cy="30" r="25" fill="#1a1a2e" stroke="#9333ea" stroke-width="2"/>
+      <text x="50" y="38" font-size="24" text-anchor="middle">📊</text>
+      <text x="50" y="75" font-family="monospace" font-size="11" fill="#c5c5c5" text-anchor="middle">Dashboard</text>
+    </g>
+  </g>
+
+  <!-- Command example -->
+  <rect x="150" y="320" width="500" height="40" rx="8" fill="#0f0f0f" stroke="#333" stroke-width="1"/>
+  <text x="170" y="345" font-family="monospace" font-size="14" fill="#10b981">$</text>
+  <text x="190" y="345" font-family="monospace" font-size="14" fill="#c5c5c5">./enumrust -d target.com --bugbounty --vuln-scan</text>
+
+  <!-- Rust badge -->
+  <g transform="translate(700, 360)">
+    <text font-family="monospace" font-size="12" fill="#666">🦀 Rust</text>
+  </g>
+
+  <!-- Author -->
+  <text x="400" y="385" font-family="monospace" font-size="11" fill="#666" text-anchor="middle">by @ofjaaah</text>
+</svg>
