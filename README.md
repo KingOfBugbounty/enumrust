@@ -302,15 +302,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ---
 
-## 🙏 Acknowledgments
-
-Built with amazing tools from:
-- [ProjectDiscovery](https://projectdiscovery.io/)
-- [Hakluke](https://github.com/hakluke)
-- [EPI052](https://github.com/epi052)
-
----
-
 <div align="center">
 
 **Made with ❤️ and Rust 🦀**
