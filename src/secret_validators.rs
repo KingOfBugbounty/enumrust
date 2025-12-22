@@ -266,7 +266,7 @@ fn has_repetitive_pattern(s: &str) -> bool {
 
     // Check substring repetition (abcabc, 123123, etc.)
     for chunk_size in 2..=(s.len() / 2) {
-        if s.len().is_multiple_of(chunk_size) {
+        if s.len() % chunk_size == 0 {
             let chunk = &s[..chunk_size];
             let repeated = chunk.repeat(s.len() / chunk_size);
             if repeated == s {

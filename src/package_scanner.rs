@@ -17,8 +17,10 @@ use tokio::time::sleep;
 pub struct PackageDependency {
     pub package_name: String,
     pub package_type: PackageType,
-    pub source_url: String,
-    pub found_in_context: String,
+    pub source_url: String,           // URL do arquivo JS onde foi encontrado
+    pub reference_url: Option<String>, // URL da página HTML que referencia o JS
+    pub found_in_context: String,      // Linha de código onde o pacote foi detectado
+    pub line_number: Option<usize>,    // Número da linha no arquivo JS
     pub exists_in_public_registry: bool,
     pub registry_url: Option<String>,
     pub potential_confusion: bool,
@@ -44,20 +46,32 @@ impl std::fmt::Display for PackageType {
 }
 
 /// Extract npm package imports from JavaScript content
-pub fn extract_npm_packages(js_content: &str, source_url: &str) -> Vec<PackageDependency> {
+/// reference_url: URL da página HTML que referencia o arquivo JS (opcional)
+pub fn extract_npm_packages(js_content: &str, source_url: &str, reference_url: Option<&str>) -> Vec<PackageDependency> {
     let mut packages = Vec::new();
     let mut seen = HashSet::new();
 
-    // Patterns for npm packages - MORE STRICT to avoid false positives
+    // Patterns for npm packages - balanced between avoiding false positives and catching real imports
+    // Multiple patterns to catch different JS formats (minified, bundled, source)
     let patterns = vec![
-        // require() calls - must be followed by closing quote and paren
-        Regex::new(r#"require\s*\(\s*["']([a-z0-9@][a-z0-9\-_./]*?)["']\s*\)"#).unwrap(),
-        // import statements - must have 'from' keyword
-        Regex::new(r#"import\s+(?:\{[^}]*\}|\*\s+as\s+\w+|\w+)\s+from\s+["']([a-z0-9@][a-z0-9\-_./]*?)["']"#).unwrap(),
-        // dynamic imports - must be followed by closing quote and paren
-        Regex::new(r#"import\s*\(\s*["']([a-z0-9@][a-z0-9\-_./]*?)["']\s*\)"#).unwrap(),
-        // package.json dependencies (if embedded) - must have version pattern
-        Regex::new(r#"["']([a-z0-9@][a-z0-9\-_./]+?)["']\s*:\s*["'][~^]?[\d.]+"#).unwrap(),
+        // require() calls - flexible format for minified JS
+        Regex::new(r#"require\s*\(\s*["']([a-z@][a-z0-9\-_./]*)["']\s*\)"#).unwrap(),
+        // ES6 import with from keyword (most common)
+        Regex::new(r#"from\s*["']([a-z@][a-z0-9\-_./]*)["']"#).unwrap(),
+        // Dynamic imports - import("package")
+        Regex::new(r#"import\s*\(\s*["']([a-z@][a-z0-9\-_./]*)["']\s*\)"#).unwrap(),
+        // Webpack/bundler style: __webpack_require__("package")
+        Regex::new(r#"__webpack_require__\s*\(\s*["']([a-z@][a-z0-9\-_./]*)["']\s*\)"#).unwrap(),
+        // AMD define dependencies: define(["dep1", "dep2"], ...)
+        Regex::new(r#"define\s*\(\s*\[[^\]]*["']([a-z@][a-z0-9\-_./]*)["']"#).unwrap(),
+        // package.json dependencies - must have version pattern
+        Regex::new(r#""([a-z@][a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)?)"\s*:\s*"[~^]?[\d]"#).unwrap(),
+        // Vite/Rollup resolved imports: "node_modules/package" pattern
+        Regex::new(r#"node_modules/([a-z@][a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)?)"#).unwrap(),
+        // ESM imports in bundled code: e("package")
+        Regex::new(r#"\be\s*\(\s*["']([a-z@][a-z0-9\-_]+)["']\s*\)"#).unwrap(),
+        // Minified require patterns: n("package"), r("package"), etc
+        Regex::new(r#"[=,;:\(]\s*[a-z]\s*\(\s*["']([a-z@][a-z0-9\-_]+)["']\s*\)"#).unwrap(),
     ];
 
     for pattern in patterns {
@@ -79,17 +93,6 @@ pub fn extract_npm_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
 
                 // *** CRITICAL: Validate NPM package name format ***
                 if !is_valid_npm_package_name(&cleaned_name) {
-                    // Debug log for filtered invalid names (only in verbose mode)
-                    #[cfg(debug_assertions)]
-                    {
-                        if has_css_unit_suffix(&cleaned_name) {
-                            eprintln!("[DEBUG] Filtered CSS value: {}", cleaned_name);
-                        } else if cleaned_name.chars().all(|c| c.is_ascii_digit()) {
-                            eprintln!("[DEBUG] Filtered pure number: {}", cleaned_name);
-                        } else {
-                            eprintln!("[DEBUG] Filtered invalid NPM name: {}", cleaned_name);
-                        }
-                    }
                     continue;
                 }
 
@@ -103,11 +106,25 @@ pub fn extract_npm_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
                     continue;
                 }
 
+                // Skip URLs and file paths
+                if is_url_or_path(&cleaned_name) {
+                    continue;
+                }
+
+                // Skip common false positive patterns
+                if is_common_false_positive(&cleaned_name) {
+                    continue;
+                }
+
+                let (context, line_number) = extract_context_with_line(js_content, &package_name);
+
                 packages.push(PackageDependency {
                     package_name: cleaned_name.clone(),
                     package_type: PackageType::NPM,
                     source_url: source_url.to_string(),
-                    found_in_context: extract_context(js_content, &package_name),
+                    reference_url: reference_url.map(|s| s.to_string()),
+                    found_in_context: context,
+                    line_number,
                     exists_in_public_registry: false,
                     registry_url: None,
                     potential_confusion: false,
@@ -120,21 +137,27 @@ pub fn extract_npm_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
     packages
 }
 
-/// Extract Python/pip package imports
-pub fn extract_pip_packages(js_content: &str, source_url: &str) -> Vec<PackageDependency> {
+/// Extract Python/pip package imports from embedded Python code or config files
+/// reference_url: URL da página HTML que referencia o arquivo (opcional)
+pub fn extract_pip_packages(js_content: &str, source_url: &str, reference_url: Option<&str>) -> Vec<PackageDependency> {
     let mut packages = Vec::new();
     let mut seen = HashSet::new();
 
-    // Patterns for Python imports (found in JS code embedding Python or comments)
+    // STRICT patterns for Python imports - only match real Python code patterns
+    // These patterns look for Python-specific syntax that won't match JS
     let patterns = vec![
-        // Python import statements (might be in comments or strings)
-        Regex::new(r#"import\s+([a-z][a-z0-9_]*)"#).unwrap(),
-        // from X import Y
-        Regex::new(r#"from\s+([a-z][a-z0-9_]*)\s+import"#).unwrap(),
-        // pip install commands in comments or strings
-        Regex::new(r#"pip\s+install\s+([a-z][a-z0-9\-_]+)"#).unwrap(),
-        // requirements.txt format
-        Regex::new(r#"^([a-z][a-z0-9\-_]+)==[\d.]+"#).unwrap(),
+        // pip install commands (strongest indicator)
+        Regex::new(r#"pip(?:3)?\s+install\s+(?:-[a-zA-Z]+\s+)*([a-z][a-z0-9\-_]+)"#).unwrap(),
+        // pip install with requirements syntax
+        Regex::new(r#"pip(?:3)?\s+install\s+["']([a-z][a-z0-9\-_]+)(?:[=<>!]+[\d.]+)?["']"#).unwrap(),
+        // requirements.txt format - must have version specifier
+        Regex::new(r#"^([a-z][a-z0-9\-_]+)\s*(?:==|>=|<=|~=|!=)[\d.]+"#).unwrap(),
+        // Python from X import Y (must have Python-specific patterns)
+        Regex::new(r#"#.*?from\s+([a-z][a-z0-9_]+)\s+import\s+[A-Z]"#).unwrap(),
+        // pyproject.toml / setup.py dependencies
+        Regex::new(r#"["']([a-z][a-z0-9\-_]+)["']\s*(?:>=|<=|==|~=)[\d.]+"#).unwrap(),
+        // Conda/pip in shell commands
+        Regex::new(r#"(?:conda|pip)\s+install\s+(?:-[yqc]\s+)*([a-z][a-z0-9\-_]+)"#).unwrap(),
     ];
 
     for pattern in patterns {
@@ -147,19 +170,17 @@ pub fn extract_pip_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
                     continue;
                 }
 
-                // *** APPLY SAME FILTERS AS NPM ***
-
                 // Skip Python built-ins
                 if is_builtin_python_module(&cleaned_name) {
                     continue;
                 }
 
-                // Skip programming keywords
+                // Skip common JS/generic keywords
                 if is_programming_keyword(&cleaned_name) {
                     continue;
                 }
 
-                // Skip CSS properties and values
+                // Skip CSS properties
                 if is_css_property(&cleaned_name) || is_css_value(&cleaned_name) {
                     continue;
                 }
@@ -169,21 +190,31 @@ pub fn extract_pip_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
                     continue;
                 }
 
-                // Skip names that look invalid
-                if is_likely_invalid_package_name(&cleaned_name) {
+                // Skip names that look invalid for pip
+                if is_likely_invalid_pip_name(&cleaned_name) {
                     continue;
                 }
 
-                // Must contain at least one letter and not be pure numbers
-                if !cleaned_name.chars().any(|c| c.is_alphabetic()) {
+                // Skip common false positives
+                if is_common_false_positive(&cleaned_name) {
                     continue;
                 }
+
+                // Must contain at least 2 letters (avoid single letters)
+                let letter_count = cleaned_name.chars().filter(|c| c.is_alphabetic()).count();
+                if letter_count < 2 {
+                    continue;
+                }
+
+                let (context, line_number) = extract_context_with_line(js_content, &package_name);
 
                 packages.push(PackageDependency {
                     package_name: cleaned_name.clone(),
                     package_type: PackageType::PIP,
                     source_url: source_url.to_string(),
-                    found_in_context: extract_context(js_content, &package_name),
+                    reference_url: reference_url.map(|s| s.to_string()),
+                    found_in_context: context,
+                    line_number,
                     exists_in_public_registry: false,
                     registry_url: None,
                     potential_confusion: false,
@@ -196,17 +227,27 @@ pub fn extract_pip_packages(js_content: &str, source_url: &str) -> Vec<PackageDe
     packages
 }
 
-/// Extract Go package imports
-pub fn extract_go_packages(js_content: &str, source_url: &str) -> Vec<PackageDependency> {
+/// Extract Go package imports from embedded Go code or config files
+/// reference_url: URL da página HTML que referencia o arquivo (opcional)
+pub fn extract_go_packages(js_content: &str, source_url: &str, reference_url: Option<&str>) -> Vec<PackageDependency> {
     let mut packages = Vec::new();
     let mut seen = HashSet::new();
 
-    // Patterns for Go imports (found in embedded Go code or comments)
+    // STRICT patterns for Go imports - must match Go-specific syntax
+    // Go packages typically have domain/org/repo format (e.g., github.com/user/repo)
     let patterns = vec![
-        // Go import statements
-        Regex::new(r#"import\s+["']([a-z][a-z0-9\-_./]+/[a-z0-9\-_./]+)["']"#).unwrap(),
-        // Go mod require
-        Regex::new(r#"require\s+([a-z][a-z0-9\-_./]+/[a-z0-9\-_./]+)\s+v[\d.]+"#).unwrap(),
+        // Go import statements - must have domain-like pattern
+        Regex::new(r#"import\s+["']((github\.com|gitlab\.com|bitbucket\.org|golang\.org|gopkg\.in)/[a-z0-9\-_.]+/[a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)*)["']"#).unwrap(),
+        // Go import with alias
+        Regex::new(r#"import\s+\w+\s+["']((github\.com|gitlab\.com|bitbucket\.org|golang\.org|gopkg\.in)/[a-z0-9\-_.]+/[a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)*)["']"#).unwrap(),
+        // Go mod require - must have version
+        Regex::new(r#"require\s+((github\.com|gitlab\.com|bitbucket\.org|golang\.org|gopkg\.in)/[a-z0-9\-_.]+/[a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)*)\s+v[\d]+\.[\d]+\.[\d]+"#).unwrap(),
+        // go.mod require block entries
+        Regex::new(r#"^\s*((github\.com|gitlab\.com|bitbucket\.org|golang\.org|gopkg\.in)/[a-z0-9\-_.]+/[a-z0-9\-_.]+(?:/[a-z0-9\-_.]+)*)\s+v[\d]+\.[\d]+\.[\d]+"#).unwrap(),
+        // go get commands
+        Regex::new(r#"go\s+get\s+(?:-[a-z]+\s+)*((github\.com|gitlab\.com|bitbucket\.org|golang\.org|gopkg\.in)/[a-z0-9\-_.]+/[a-z0-9\-_.]+)"#).unwrap(),
+        // Internal company packages (must start with valid domain)
+        Regex::new(r#"import\s+["']([a-z0-9]+\.[a-z]+/[a-z0-9\-_.]+/[a-z0-9\-_.]+)["']"#).unwrap(),
     ];
 
     for pattern in patterns {
@@ -219,11 +260,25 @@ pub fn extract_go_packages(js_content: &str, source_url: &str) -> Vec<PackageDep
                     continue;
                 }
 
+                // Validate Go package name - must look like a valid Go import path
+                if !is_valid_go_package_name(&cleaned_name) {
+                    continue;
+                }
+
+                // Skip common false positives
+                if is_common_false_positive(&cleaned_name) {
+                    continue;
+                }
+
+                let (context, line_number) = extract_context_with_line(js_content, &package_name);
+
                 packages.push(PackageDependency {
                     package_name: cleaned_name.clone(),
                     package_type: PackageType::GO,
                     source_url: source_url.to_string(),
-                    found_in_context: extract_context(js_content, &package_name),
+                    reference_url: reference_url.map(|s| s.to_string()),
+                    found_in_context: context,
+                    line_number,
                     exists_in_public_registry: false,
                     registry_url: None,
                     potential_confusion: false,
@@ -237,12 +292,13 @@ pub fn extract_go_packages(js_content: &str, source_url: &str) -> Vec<PackageDep
 }
 
 /// Extract all packages from JS content
-pub fn extract_all_packages(js_content: &str, source_url: &str) -> Vec<PackageDependency> {
+/// reference_url: URL da página HTML que referencia o arquivo JS (opcional)
+pub fn extract_all_packages(js_content: &str, source_url: &str, reference_url: Option<&str>) -> Vec<PackageDependency> {
     let mut all_packages = Vec::new();
 
-    all_packages.extend(extract_npm_packages(js_content, source_url));
-    all_packages.extend(extract_pip_packages(js_content, source_url));
-    all_packages.extend(extract_go_packages(js_content, source_url));
+    all_packages.extend(extract_npm_packages(js_content, source_url, reference_url));
+    all_packages.extend(extract_pip_packages(js_content, source_url, reference_url));
+    all_packages.extend(extract_go_packages(js_content, source_url, reference_url));
 
     all_packages
 }
@@ -381,9 +437,32 @@ pub async fn validate_package(
     Ok(())
 }
 
+/// Information about a JS file and where it was referenced
+#[derive(Debug, Clone)]
+pub struct JsFileInfo {
+    pub js_url: String,
+    pub reference_url: Option<String>, // URL da página HTML que referencia o JS
+}
+
 /// Scan JS files for packages and validate them
+/// js_files_info: Lista de arquivos JS com informações de referência
 pub async fn scan_js_for_packages(
     js_files: &[String],
+    client: &Client,
+    max_concurrent: usize,
+) -> Vec<PackageDependency> {
+    // Convert to JsFileInfo with None reference for backward compatibility
+    let files_info: Vec<JsFileInfo> = js_files.iter().map(|url| JsFileInfo {
+        js_url: url.clone(),
+        reference_url: None,
+    }).collect();
+
+    scan_js_for_packages_with_refs(&files_info, client, max_concurrent).await
+}
+
+/// Scan JS files for packages with reference URLs
+pub async fn scan_js_for_packages_with_refs(
+    js_files_info: &[JsFileInfo],
     client: &Client,
     max_concurrent: usize,
 ) -> Vec<PackageDependency> {
@@ -393,29 +472,33 @@ pub async fn scan_js_for_packages(
 
     // Extract packages from all JS files
     let mut all_packages = Vec::new();
-    let total_files = js_files.len();
+    let total_files = js_files_info.len();
     let mut scanned = 0;
     let mut found_in_files = 0;
 
-    for js_url in js_files {
+    for file_info in js_files_info {
         scanned += 1;
 
         // Fetch JS content
         match client
-            .get(js_url)
+            .get(&file_info.js_url)
             .timeout(Duration::from_secs(15))
             .send()
             .await
         {
             Ok(response) => {
                 if let Ok(js_content) = response.text().await {
-                    let packages = extract_all_packages(&js_content, js_url);
+                    let packages = extract_all_packages(
+                        &js_content,
+                        &file_info.js_url,
+                        file_info.reference_url.as_deref()
+                    );
                     if !packages.is_empty() {
                         found_in_files += 1;
                         println!(
                             "{}",
                             format!("  [+] [{}/{}] Found {} packages in: {}",
-                                scanned, total_files, packages.len(), js_url
+                                scanned, total_files, packages.len(), file_info.js_url
                             ).green()
                         );
                     } else if scanned <= 10 || scanned % 20 == 0 {
@@ -423,7 +506,7 @@ pub async fn scan_js_for_packages(
                         println!(
                             "{}",
                             format!("  [-] [{}/{}] No packages in: {}",
-                                scanned, total_files, js_url
+                                scanned, total_files, file_info.js_url
                             ).yellow()
                         );
                     }
@@ -435,7 +518,7 @@ pub async fn scan_js_for_packages(
                     println!(
                         "{}",
                         format!("  [!] [{}/{}] Failed to fetch: {} - {}",
-                            scanned, total_files, js_url, e
+                            scanned, total_files, file_info.js_url, e
                         ).red()
                     );
                 }
@@ -486,7 +569,7 @@ pub fn save_packages_to_json(
     Ok(())
 }
 
-/// Save only dependency confusion findings
+/// Save only dependency confusion findings with detailed reference information
 pub fn save_dependency_confusion_findings(
     packages: &[PackageDependency],
     output_path: &Path,
@@ -498,20 +581,63 @@ pub fn save_dependency_confusion_findings(
 
     let mut file = File::create(output_path)?;
 
-    writeln!(file, "=== DEPENDENCY CONFUSION VULNERABILITIES ===")?;
-    writeln!(file, "Total packages analyzed: {}", packages.len())?;
-    writeln!(file, "Potential confusion vulnerabilities: {}", confusion_packages.len())?;
+    writeln!(file, "╔════════════════════════════════════════════════════════════════════╗")?;
+    writeln!(file, "║          DEPENDENCY CONFUSION VULNERABILITIES REPORT              ║")?;
+    writeln!(file, "╚════════════════════════════════════════════════════════════════════╝")?;
+    writeln!(file)?;
+    writeln!(file, "Summary:")?;
+    writeln!(file, "  Total packages analyzed: {}", packages.len())?;
+    writeln!(file, "  Potential vulnerabilities: {}", confusion_packages.len())?;
+    writeln!(file)?;
+    writeln!(file, "────────────────────────────────────────────────────────────────────")?;
     writeln!(file)?;
 
-    for package in confusion_packages {
-        writeln!(file, "[{}] {} - NOT FOUND IN PUBLIC REGISTRY",
-                 package.package_type, package.package_name)?;
-        writeln!(file, "  Source: {}", package.source_url)?;
-        writeln!(file, "  Context: {}", package.found_in_context)?;
-        if let Some(ref url) = package.registry_url {
-            writeln!(file, "  Checked: {}", url)?;
+    for (idx, package) in confusion_packages.iter().enumerate() {
+        writeln!(file, "┌─ Finding #{} ─────────────────────────────────────────────────────", idx + 1)?;
+        writeln!(file, "│")?;
+        writeln!(file, "│  Package:     {} ({})", package.package_name, package.package_type)?;
+        writeln!(file, "│  Status:      NOT FOUND IN PUBLIC REGISTRY")?;
+        writeln!(file, "│")?;
+        writeln!(file, "│  JS File:     {}", package.source_url)?;
+
+        // Show line number if available
+        if let Some(line) = package.line_number {
+            writeln!(file, "│  Line:        {}", line)?;
         }
+
+        // Show reference URL if available (HTML page that loaded this JS)
+        if let Some(ref ref_url) = package.reference_url {
+            writeln!(file, "│  Referenced:  {}", ref_url)?;
+        }
+
+        writeln!(file, "│")?;
+        writeln!(file, "│  Context:")?;
+        // Truncate context if too long for display
+        let context = if package.found_in_context.len() > 120 {
+            format!("{}...", &package.found_in_context[..120])
+        } else {
+            package.found_in_context.clone()
+        };
+        writeln!(file, "│    {}", context)?;
+
+        if let Some(ref url) = package.registry_url {
+            writeln!(file, "│")?;
+            writeln!(file, "│  Verified at: {}", url)?;
+        }
+
+        writeln!(file, "│")?;
+        writeln!(file, "└──────────────────────────────────────────────────────────────────")?;
         writeln!(file)?;
+    }
+
+    if !confusion_packages.is_empty() {
+        writeln!(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")?;
+        writeln!(file, "NEXT STEPS:")?;
+        writeln!(file, "  1. Verify if these packages are internal/private packages")?;
+        writeln!(file, "  2. If internal, check if the package name is available on public registry")?;
+        writeln!(file, "  3. Consider registering placeholder packages to prevent hijacking")?;
+        writeln!(file, "  4. Implement registry scoping/namespacing for internal packages")?;
+        writeln!(file, "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")?;
     }
 
     Ok(())
@@ -540,26 +666,53 @@ fn clean_package_name(name: &str, pkg_type: PackageType) -> String {
     }
 }
 
-fn extract_context(content: &str, package_name: &str) -> String {
+/// Extract context (line content and line number) where package was found
+fn extract_context_with_line(content: &str, package_name: &str) -> (String, Option<usize>) {
     // Find the line containing the package reference
-    for line in content.lines() {
+    for (idx, line) in content.lines().enumerate() {
         if line.contains(package_name) {
-            return line.trim().chars().take(100).collect();
+            let context = line.trim().chars().take(150).collect();
+            return (context, Some(idx + 1)); // Line numbers are 1-indexed
         }
     }
-    String::new()
+    (String::new(), None)
 }
 
 fn is_builtin_nodejs_module(name: &str) -> bool {
     const BUILTINS: &[&str] = &[
+        // Core modules
         "fs", "path", "http", "https", "os", "crypto", "util", "events",
         "stream", "buffer", "child_process", "cluster", "dgram", "dns",
         "domain", "net", "querystring", "readline", "repl", "tls", "tty",
         "url", "v8", "vm", "zlib", "assert", "console", "module", "process",
         "timers", "string_decoder", "punycode", "async_hooks", "inspector",
-        "perf_hooks", "worker_threads",
+        "perf_hooks", "worker_threads", "constants", "sys", "wasi",
+        // Node prefixed modules
+        "node:fs", "node:path", "node:http", "node:https", "node:os",
+        "node:crypto", "node:util", "node:events", "node:stream", "node:buffer",
+        "node:child_process", "node:cluster", "node:dgram", "node:dns",
+        "node:net", "node:querystring", "node:readline", "node:tls", "node:url",
+        "node:v8", "node:vm", "node:zlib", "node:assert", "node:console",
+        "node:module", "node:process", "node:timers", "node:worker_threads",
+        // fs submodules
+        "fs/promises", "node:fs/promises",
+        // Stream submodules
+        "stream/promises", "stream/consumers", "stream/web",
+        // Other common built-ins
+        "diagnostics_channel", "trace_events", "node:test",
     ];
-    BUILTINS.contains(&name)
+
+    // Check exact match
+    if BUILTINS.contains(&name) {
+        return true;
+    }
+
+    // Check if starts with node: prefix
+    if name.starts_with("node:") {
+        return true;
+    }
+
+    false
 }
 
 fn is_builtin_python_module(name: &str) -> bool {
@@ -634,9 +787,17 @@ fn is_programming_keyword(name: &str) -> bool {
 
 /// Check if name looks like a hash or ID (long hexadecimal string)
 fn is_hash_or_id(name: &str) -> bool {
-    // Detect long hexadecimal strings (likely hashes, webpack chunk IDs, etc)
+    // Detect hexadecimal strings (likely hashes, webpack chunk IDs, etc)
+
+    // Short hashes (8+ chars) must be 100% hex
+    if name.len() >= 8 && name.len() < 16 {
+        if name.chars().all(|c| c.is_ascii_hexdigit()) {
+            return true;
+        }
+    }
+
+    // Longer hashes (16+ chars) can have 90%+ hex
     if name.len() >= 16 {
-        // More than 90% hexadecimal characters = probably a hash
         let hex_chars = name.chars().filter(|c| c.is_ascii_hexdigit()).count();
         if hex_chars as f32 / name.len() as f32 > 0.9 {
             return true;
@@ -646,6 +807,13 @@ fn is_hash_or_id(name: &str) -> bool {
     // Pure numeric strings longer than 4 digits (port numbers, IDs, etc)
     if name.len() > 4 && name.chars().all(|c| c.is_ascii_digit()) {
         return true;
+    }
+
+    // Detect patterns like "module-hash" where hash is 8+ hex chars
+    if let Some(last_segment) = name.rsplit('-').next() {
+        if last_segment.len() >= 8 && last_segment.chars().all(|c| c.is_ascii_hexdigit()) {
+            return true;
+        }
     }
 
     false
@@ -835,6 +1003,188 @@ fn has_css_unit_suffix(value: &str) -> bool {
     false
 }
 
+/// Check if name looks like a URL or file path (common false positive)
+fn is_url_or_path(name: &str) -> bool {
+    // URLs
+    if name.starts_with("http://") || name.starts_with("https://") || name.starts_with("//") {
+        return true;
+    }
+
+    // File extensions that indicate it's a path, not a package
+    let file_extensions = [".js", ".ts", ".jsx", ".tsx", ".css", ".scss", ".json", ".html", ".svg", ".png", ".jpg", ".gif", ".woff", ".ttf"];
+    if file_extensions.iter().any(|ext| name.ends_with(ext)) {
+        return true;
+    }
+
+    // Looks like a file path with directory separators (not npm scoped)
+    if !name.starts_with('@') && name.matches('/').count() > 1 {
+        return true;
+    }
+
+    // Windows-style paths
+    if name.contains('\\') {
+        return true;
+    }
+
+    // Data URLs
+    if name.starts_with("data:") {
+        return true;
+    }
+
+    false
+}
+
+/// Check for common false positive patterns
+fn is_common_false_positive(name: &str) -> bool {
+    const FALSE_POSITIVES: &[&str] = &[
+        // Generic/test names
+        "test", "tests", "example", "examples", "demo", "sample", "mock", "stub",
+        "foo", "bar", "baz", "qux", "dummy", "fake", "temp", "tmp", "spec",
+        // Build artifacts / chunks
+        "chunk", "vendor", "bundle", "main", "app", "index", "runtime", "common",
+        "shared", "core", "lib", "libs", "dist", "build", "output", "polyfill",
+        // Asset names
+        "styles", "style", "images", "image", "fonts", "font", "assets", "static",
+        "icons", "icon", "media", "public", "resources",
+        // Common variables that get caught
+        "undefined", "null", "true", "false", "default", "module", "exports",
+        "require", "define", "global", "self", "this", "super", "prototype",
+        // HTML/DOM related
+        "document", "window", "navigator", "location", "history", "screen",
+        "element", "node", "text", "html", "body", "head", "script", "link",
+        // Single-letter or very short (common in minified code)
+        "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z",
+        // Numbers as strings
+        "0", "1", "2", "3", "4", "5", "6", "7", "8", "9",
+        // Common web/dev terms
+        "api", "url", "uri", "src", "href", "cdn", "env", "dev", "prod", "staging",
+        "config", "settings", "options", "params", "args", "data", "info",
+        // Webpack/bundler artifacts (internal references, not package names)
+        "webpackchunk", "__webpack", "turbopack",
+        // Event/action names
+        "click", "change", "submit", "load", "error", "success", "pending",
+        "init", "start", "stop", "open", "close", "show", "hide", "toggle",
+    ];
+
+    let lower = name.to_lowercase();
+
+    // Exact match
+    if FALSE_POSITIVES.contains(&lower.as_str()) {
+        return true;
+    }
+
+    // Prefixes that indicate internal/test code
+    if lower.starts_with("__") || lower.starts_with("_") {
+        return true;
+    }
+
+    // Looks like a hash/chunk ID (common in bundled code)
+    if name.len() >= 8 && name.chars().filter(|c| c.is_ascii_hexdigit()).count() == name.len() {
+        return true;
+    }
+
+    // Numbered chunks (e.g., "123", "chunk-456")
+    if name.chars().all(|c| c.is_ascii_digit() || c == '-') {
+        return true;
+    }
+
+    // Very short names (1-2 chars) are likely minified variable names
+    if name.len() <= 2 && !name.starts_with('@') {
+        return true;
+    }
+
+    // Names with only vowels or consonants (likely not real packages)
+    let has_vowel = name.chars().any(|c| "aeiou".contains(c.to_ascii_lowercase()));
+    let has_consonant = name.chars().any(|c| c.is_ascii_alphabetic() && !"aeiou".contains(c.to_ascii_lowercase()));
+    if name.len() >= 3 && name.chars().all(|c| c.is_ascii_alphabetic()) && (!has_vowel || !has_consonant) {
+        return true;
+    }
+
+    false
+}
+
+/// Check if name is likely an invalid pip package name
+fn is_likely_invalid_pip_name(name: &str) -> bool {
+    // PyPI package names must:
+    // - Start with a letter or number
+    // - Contain only letters, numbers, dots, underscores, hyphens
+    // - Be at least 2 characters
+
+    if name.len() < 2 {
+        return true;
+    }
+
+    // Must start with letter or number
+    if !name.chars().next().unwrap().is_alphanumeric() {
+        return true;
+    }
+
+    // Check for invalid characters
+    if !name.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+        return true;
+    }
+
+    // Common false positives for pip
+    const PIP_FALSE_POSITIVES: &[&str] = &[
+        "import", "from", "as", "with", "def", "class", "return", "if", "else",
+        "elif", "for", "while", "try", "except", "finally", "raise", "assert",
+        "lambda", "yield", "global", "nonlocal", "pass", "break", "continue",
+        "and", "or", "not", "in", "is", "none", "true", "false",
+    ];
+
+    if PIP_FALSE_POSITIVES.contains(&name.to_lowercase().as_str()) {
+        return true;
+    }
+
+    false
+}
+
+/// Validate Go package name - must look like a valid Go import path
+fn is_valid_go_package_name(name: &str) -> bool {
+    // Go packages should:
+    // 1. Start with a domain (contain at least one dot before first slash)
+    // 2. Have at least 2 path segments (domain/owner/repo)
+    // 3. Not contain spaces or special characters
+
+    let parts: Vec<&str> = name.split('/').collect();
+
+    // Must have at least 2 parts (domain/package or domain/org/package)
+    if parts.len() < 2 {
+        return false;
+    }
+
+    // First part should look like a domain
+    let domain = parts[0];
+    if !domain.contains('.') {
+        return false;
+    }
+
+    // Domain should have valid TLD
+    let valid_domains = ["github.com", "gitlab.com", "bitbucket.org", "golang.org", "gopkg.in", "google.golang.org"];
+    let is_known_domain = valid_domains.iter().any(|&d| domain.eq_ignore_ascii_case(d));
+
+    // Or it should at least look like a domain (word.tld)
+    let looks_like_domain = domain.split('.').count() >= 2 &&
+        domain.chars().all(|c| c.is_alphanumeric() || c == '.' || c == '-');
+
+    if !is_known_domain && !looks_like_domain {
+        return false;
+    }
+
+    // All parts should be valid
+    for part in &parts[1..] {
+        if part.is_empty() {
+            return false;
+        }
+        if !part.chars().all(|c| c.is_alphanumeric() || c == '-' || c == '_' || c == '.') {
+            return false;
+        }
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -945,7 +1295,7 @@ mod tests {
     #[test]
     fn test_extract_npm_packages_filters_css() {
         let js_content = r#"var x = {width: "130px", paddingRight: "10px"}; var port = 443;"#;
-        let packages = extract_npm_packages(js_content, "https://test.com/test.js");
+        let packages = extract_npm_packages(js_content, "https://test.com/test.js", None);
         assert_eq!(packages.len(), 0);
     }
 
@@ -958,7 +1308,7 @@ mod tests {
             if (this.value && that.name) { return; }
             import something from 'module-0175b6513d6d8f1e484e';
         "#;
-        let packages = extract_npm_packages(js_content, "https://test.com/test.js");
+        let packages = extract_npm_packages(js_content, "https://test.com/test.js", None);
 
         // Should NOT detect: padding-right, stroke-width, data-period, this, 0175b6513d6d8f1e484e
         assert!(!packages.iter().any(|p| p.package_name == "padding-right"));
@@ -971,9 +1321,79 @@ mod tests {
     #[test]
     fn test_extract_npm_packages_detects_valid() {
         let js_content = r#"import React from 'react'; const l = require('lodash');"#;
-        let packages = extract_npm_packages(js_content, "https://test.com/test.js");
+        let packages = extract_npm_packages(js_content, "https://test.com/test.js", None);
         assert!(packages.iter().any(|p| p.package_name == "react"));
         assert!(packages.iter().any(|p| p.package_name == "lodash"));
+    }
+
+    #[test]
+    fn test_extract_npm_packages_with_reference_url() {
+        let js_content = r#"import axios from 'axios';"#;
+        let packages = extract_npm_packages(
+            js_content,
+            "https://example.com/js/app.js",
+            Some("https://example.com/index.html")
+        );
+        assert_eq!(packages.len(), 1);
+        assert_eq!(packages[0].package_name, "axios");
+        assert_eq!(packages[0].reference_url, Some("https://example.com/index.html".to_string()));
+        assert!(packages[0].line_number.is_some());
+    }
+
+    #[test]
+    fn test_common_false_positives() {
+        // Test the is_common_false_positive function
+        assert!(is_common_false_positive("test"));
+        assert!(is_common_false_positive("example"));
+        assert!(is_common_false_positive("__webpack"));
+        assert!(is_common_false_positive("chunk"));
+        assert!(is_common_false_positive("abcdef12")); // Hash-like
+
+        // Should NOT be false positives
+        assert!(!is_common_false_positive("axios"));
+        assert!(!is_common_false_positive("react"));
+        assert!(!is_common_false_positive("express"));
+    }
+
+    #[test]
+    fn test_url_or_path_detection() {
+        // Should detect URLs and paths
+        assert!(is_url_or_path("https://example.com/script.js"));
+        assert!(is_url_or_path("http://example.com/lib.js"));
+        assert!(is_url_or_path("//cdn.example.com/lib.js"));
+        assert!(is_url_or_path("./module.js"));
+        assert!(is_url_or_path("data:text/javascript,alert(1)"));
+
+        // Should NOT detect as URL/path
+        assert!(!is_url_or_path("lodash"));
+        assert!(!is_url_or_path("@babel/core"));
+        assert!(!is_url_or_path("react-dom"));
+    }
+
+    #[test]
+    fn test_go_package_validation() {
+        // Valid Go packages
+        assert!(is_valid_go_package_name("github.com/user/repo"));
+        assert!(is_valid_go_package_name("gitlab.com/org/project"));
+        assert!(is_valid_go_package_name("golang.org/x/tools"));
+
+        // Invalid Go packages
+        assert!(!is_valid_go_package_name("react")); // No domain
+        assert!(!is_valid_go_package_name("lodash")); // No domain
+        assert!(!is_valid_go_package_name("user/repo")); // No TLD
+    }
+
+    #[test]
+    fn test_pip_package_validation() {
+        // Invalid pip packages
+        assert!(is_likely_invalid_pip_name("a")); // Too short
+        assert!(is_likely_invalid_pip_name("import")); // Keyword
+        assert!(is_likely_invalid_pip_name("from")); // Keyword
+
+        // Valid pip packages (function returns false for valid)
+        assert!(!is_likely_invalid_pip_name("requests"));
+        assert!(!is_likely_invalid_pip_name("django"));
+        assert!(!is_likely_invalid_pip_name("flask"));
     }
 
     #[test]
@@ -989,5 +1409,60 @@ mod tests {
         assert!(!is_likely_invalid_package_name("react"));
         assert!(!is_likely_invalid_package_name("lodash"));
         assert!(!is_likely_invalid_package_name("react-dom"));
+    }
+
+    #[test]
+    fn test_extract_multiple_packages() {
+        // Test that multiple packages are detected in the same JS file
+        let js_content = r#"
+            import React from 'react';
+            import { useState } from 'react';
+            import axios from 'axios';
+            import lodash from 'lodash';
+            import moment from 'moment';
+            const express = require('express');
+            const bodyParser = require('body-parser');
+        "#;
+        let packages = extract_npm_packages(js_content, "https://test.com/app.js", None);
+
+        // Should detect all unique packages (react only once due to dedup)
+        assert!(packages.iter().any(|p| p.package_name == "react"), "Should detect react");
+        assert!(packages.iter().any(|p| p.package_name == "axios"), "Should detect axios");
+        assert!(packages.iter().any(|p| p.package_name == "lodash"), "Should detect lodash");
+        assert!(packages.iter().any(|p| p.package_name == "moment"), "Should detect moment");
+        assert!(packages.iter().any(|p| p.package_name == "express"), "Should detect express");
+        assert!(packages.iter().any(|p| p.package_name == "body-parser"), "Should detect body-parser");
+
+        // Should have at least 6 unique packages
+        assert!(packages.len() >= 6, "Should detect at least 6 packages, got {}", packages.len());
+    }
+
+    #[test]
+    fn test_extract_packages_minified_js() {
+        // Test minified JS patterns
+        let js_content = r#"from"react";from"axios";from"lodash";require("express");require("moment")"#;
+        let packages = extract_npm_packages(js_content, "https://test.com/bundle.min.js", None);
+
+        assert!(packages.iter().any(|p| p.package_name == "react"), "Should detect react in minified");
+        assert!(packages.iter().any(|p| p.package_name == "axios"), "Should detect axios in minified");
+        assert!(packages.iter().any(|p| p.package_name == "lodash"), "Should detect lodash in minified");
+        assert!(packages.iter().any(|p| p.package_name == "express"), "Should detect express in minified");
+        assert!(packages.iter().any(|p| p.package_name == "moment"), "Should detect moment in minified");
+    }
+
+    #[test]
+    fn test_extract_scoped_packages() {
+        let js_content = r#"
+            import { render } from '@testing-library/react';
+            import styled from '@emotion/styled';
+            import { Button } from '@mui/material';
+            const core = require('@babel/core');
+        "#;
+        let packages = extract_npm_packages(js_content, "https://test.com/app.js", None);
+
+        assert!(packages.iter().any(|p| p.package_name == "@testing-library/react"), "Should detect @testing-library/react");
+        assert!(packages.iter().any(|p| p.package_name == "@emotion/styled"), "Should detect @emotion/styled");
+        assert!(packages.iter().any(|p| p.package_name == "@mui/material"), "Should detect @mui/material");
+        assert!(packages.iter().any(|p| p.package_name == "@babel/core"), "Should detect @babel/core");
     }
 }

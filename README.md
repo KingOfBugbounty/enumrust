@@ -93,11 +93,11 @@ cargo build --release
 ### 2. Basic Scan
 
 ```bash
-# Domain enumeration with vulnerability scan
-./target/release/enumrust -d example.com --subfinder --vuln-scan
+# Domain enumeration with full scan
+./target/release/enumrust -d example.com --subfinder --full-scan
 
-# Infrastructure scan with IP range
-./target/release/enumrust --infraestrutura --ip-range 192.168.1.0/24 --vuln-scan
+# Domain enumeration (basic)
+./target/release/enumrust -d example.com --subfinder
 ```
 
 ### 3. Dashboard Mode
@@ -110,7 +110,7 @@ cargo build --release
 ./target/release/enumrust --dashboard --dashboard-port 3000
 
 # Run scan with dashboard monitoring
-./target/release/enumrust -d target.com --subfinder --vuln-scan --dashboard
+./target/release/enumrust -d target.com --subfinder --full-scan --dashboard
 ```
 
 **First Access Setup:**
@@ -180,14 +180,10 @@ cargo build --release
 ### Domain Reconnaissance
 ```bash
 # Full enumeration with all sources
-./target/release/enumrust -d target.com \
-  --whois \
-  --subfinder \
-  --hacktrails \
-  --vuln-scan
+./target/release/enumrust -d target.com --full-scan
 
 # Quick scan with specific tools
-./target/release/enumrust -d target.com --subfinder --vuln-scan
+./target/release/enumrust -d target.com --subfinder
 ```
 
 ### Infrastructure Scanning
@@ -205,16 +201,15 @@ cargo build --release
 ./target/release/enumrust --infraestrutura --ip-range 192.168.1.1,192.168.1.5,192.168.1.10
 
 # From file
-./target/release/enumrust --infraestrutura --ip-list targets.txt --vuln-scan
+./target/release/enumrust -f targets.txt --full-scan
 ```
 
 ### Advanced Options
 ```bash
-# Full port scan with vulnerability detection
-./target/release/enumrust --infraestrutura \
-  --ip-list production.txt \
-  --full-port-scan \
-  --vuln-scan
+# Full IP scan with directory fuzzing
+./target/release/enumrust -d target.com \
+  --ip-scan \
+  --ip-full-scan
 ```
 
 ---
