@@ -299,7 +299,6 @@ MIT License - see [LICENSE](LICENSE) for details.
 **OFJAAAH**
 
 - GitHub: [@ofjaaah](https://github.com/ofjaaah)
-- Twitter: [@oaborboleta](https://twitter.com/oaborboleta)
 
 ---
 
