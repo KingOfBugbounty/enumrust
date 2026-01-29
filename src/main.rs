@@ -32,6 +32,7 @@ mod progress;
 mod report_generator;
 mod secret_validators;
 mod secrets_scanner;
+mod info_disclosure_scanner;
 
 use metrics::EnumRustMetrics;
 use progress::{EventType, ProgressTracker};
@@ -262,6 +263,30 @@ struct Args {
     ip_strict: bool,
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // INFORMATION DISCLOSURE SCANNING OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Enable information disclosure scanning (S3, Actuator, GraphQL, sensitive files)
+    #[arg(long, help_heading = "Info Disclosure",
+          help = "Scan for information disclosure: cloud storage misconfig, Spring Actuator, GraphQL introspection, sensitive files")]
+    disclosure_scan: bool,
+
+    /// Enable S3/Cloud storage misconfiguration scanning
+    #[arg(long, help_heading = "Info Disclosure",
+          help = "Scan cloud storage (S3, GCS, Azure, R2) for misconfigurations using s3scan")]
+    s3_scan: bool,
+
+    /// Enable Spring Boot Actuator endpoint scanning
+    #[arg(long, help_heading = "Info Disclosure",
+          help = "Scan for exposed Spring Boot Actuator endpoints (heapdump, env, etc.) using actuatoRust")]
+    actuator_scan: bool,
+
+    /// Enable GraphQL introspection scanning
+    #[arg(long, help_heading = "Info Disclosure",
+          help = "Scan for GraphQL endpoints and extract schemas using clairvoyance")]
+    graphql_scan: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // BRUTEFORCE OPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -321,6 +346,20 @@ struct Args {
     #[arg(long, default_value = "10", value_name = "NUM", help_heading = "Performance",
           help = "Number of concurrent workers for async operations (default: 10, max recommended: 100)")]
     workers: usize,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL MANAGEMENT OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Install all required external tools
+    #[arg(long, help_heading = "Tool Management",
+          help = "Install all required tools (httpx, nuclei, subfinder, masscan, etc.)")]
+    install_tools: bool,
+
+    /// Check which tools are installed
+    #[arg(long, help_heading = "Tool Management",
+          help = "Check which required tools are installed and their versions")]
+    check_tools: bool,
 }
 
 /// Main entry point
@@ -331,6 +370,19 @@ async fn main() -> Result<()> {
 
     // Print banner
     print_banner();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL MANAGEMENT: Install or check tools
+    // ═══════════════════════════════════════════════════════════════════════════
+    if args.check_tools {
+        check_tools_status().await;
+        return Ok(());
+    }
+
+    if args.install_tools {
+        install_all_tools().await?;
+        return Ok(());
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // VALIDATION: Require --haktrails or --subfinder for domain scans
@@ -1715,6 +1767,56 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // STAGE 10.5: INFORMATION DISCLOSURE SCANNING (S3, Actuator, GraphQL)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let disclosure_results = if args.disclosure_scan || args.s3_scan || args.actuator_scan || args.graphql_scan || args.full_scan {
+        println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".cyan().bold());
+        println!("{}", "║  🔓 STAGE 10.5: INFORMATION DISCLOSURE SCANNING                               ║".cyan().bold());
+        println!("{}", "║     S3/Cloud Storage | Spring Actuator | GraphQL Introspection               ║".cyan());
+        println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".cyan().bold());
+
+        progress.tool_started("Info Disclosure Scanner");
+
+        // Collect JS file contents for cloud storage URL extraction
+        let js_contents: Vec<String> = if let Ok(entries) = std::fs::read_dir(&base_path) {
+            entries
+                .filter_map(|e| e.ok())
+                .filter(|e| e.path().extension().map_or(false, |ext| ext == "js" || ext == "txt"))
+                .filter_map(|e| std::fs::read_to_string(e.path()).ok())
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        let http200_path = if http200_file.exists() {
+            Some(http200_file.as_path())
+        } else {
+            None
+        };
+
+        match info_disclosure_scanner::run_info_disclosure_scan(
+            domain,
+            &base_path,
+            http200_path,
+            Some(&js_contents),
+            true, // verbose
+        ).await {
+            Ok(results) => {
+                progress.tool_completed("Info Disclosure Scanner", 92.0);
+                progress.data_found("disclosure_findings", results.total_findings, 92.0);
+                Some(results)
+            }
+            Err(e) => {
+                eprintln!("{} Info disclosure scan error: {}", "[ERROR]".red(), e);
+                progress.tool_completed("Info Disclosure Scanner", 92.0);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // STAGE 11: NUCLEI + FEROXBUSTER (92-100%)
     // ═══════════════════════════════════════════════════════════════════════════
     println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".magenta().bold());
@@ -2242,4 +2344,534 @@ fn count_lines(path: &Path) -> Result<usize> {
     let file = File::open(path)?;
     let reader = BufReader::new(file);
     Ok(reader.lines().count())
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════════
+// TOOL MANAGEMENT FUNCTIONS
+// ═══════════════════════════════════════════════════════════════════════════════════
+
+/// Tool definition with installation info
+struct ToolInfo {
+    name: &'static str,
+    binary: &'static str,
+    description: &'static str,
+    is_core: bool,
+    install_cmd: &'static str,
+}
+
+/// Get list of all required tools
+fn get_tools_list() -> Vec<ToolInfo> {
+    vec![
+        // Core tools (required)
+        ToolInfo {
+            name: "httpx",
+            binary: "httpx",
+            description: "HTTP probing and validation",
+            is_core: true,
+            install_cmd: "go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest",
+        },
+        ToolInfo {
+            name: "dnsx",
+            binary: "dnsx",
+            description: "DNS resolution and validation",
+            is_core: true,
+            install_cmd: "go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest",
+        },
+        ToolInfo {
+            name: "nuclei",
+            binary: "nuclei",
+            description: "Vulnerability scanner",
+            is_core: true,
+            install_cmd: "go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest",
+        },
+        ToolInfo {
+            name: "masscan",
+            binary: "masscan",
+            description: "Port scanner (requires sudo)",
+            is_core: true,
+            install_cmd: "apt-get install -y masscan || brew install masscan || pacman -S masscan",
+        },
+        // Optional tools
+        ToolInfo {
+            name: "subfinder",
+            binary: "subfinder",
+            description: "Passive subdomain discovery",
+            is_core: false,
+            install_cmd: "go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest",
+        },
+        ToolInfo {
+            name: "haktrails",
+            binary: "haktrails",
+            description: "SecurityTrails subdomain discovery",
+            is_core: false,
+            install_cmd: "go install -v github.com/hakluke/haktrails@latest",
+        },
+        ToolInfo {
+            name: "tlsx",
+            binary: "tlsx",
+            description: "TLS/SSL certificate analysis",
+            is_core: false,
+            install_cmd: "go install -v github.com/projectdiscovery/tlsx/cmd/tlsx@latest",
+        },
+        ToolInfo {
+            name: "ffuf",
+            binary: "ffuf",
+            description: "Fast web fuzzer",
+            is_core: false,
+            install_cmd: "go install -v github.com/ffuf/ffuf/v2@latest",
+        },
+        ToolInfo {
+            name: "feroxbuster",
+            binary: "feroxbuster",
+            description: "Recursive directory brute-forcer",
+            is_core: false,
+            install_cmd: "apt-get install -y feroxbuster || cargo install feroxbuster || brew install feroxbuster",
+        },
+        ToolInfo {
+            name: "trufflehog",
+            binary: "trufflehog",
+            description: "Secret scanner",
+            is_core: false,
+            install_cmd: "go install -v github.com/trufflesecurity/trufflehog/v3@latest",
+        },
+        ToolInfo {
+            name: "anew",
+            binary: "anew",
+            description: "Append unique lines to file",
+            is_core: false,
+            install_cmd: "go install -v github.com/tomnomnom/anew@latest",
+        },
+        ToolInfo {
+            name: "jq",
+            binary: "jq",
+            description: "JSON processor",
+            is_core: false,
+            install_cmd: "apt-get install -y jq || brew install jq || pacman -S jq",
+        },
+        ToolInfo {
+            name: "whois",
+            binary: "whois",
+            description: "Domain registration lookup",
+            is_core: false,
+            install_cmd: "apt-get install -y whois || brew install whois || pacman -S whois",
+        },
+        ToolInfo {
+            name: "tmux",
+            binary: "tmux",
+            description: "Terminal multiplexer (persistent sessions)",
+            is_core: false,
+            install_cmd: "apt-get install -y tmux || brew install tmux || pacman -S tmux",
+        },
+        // Additional discovery tools
+        ToolInfo {
+            name: "hakrawler",
+            binary: "hakrawler",
+            description: "Web crawler for URL discovery",
+            is_core: false,
+            install_cmd: "go install -v github.com/hakluke/hakrawler@latest",
+        },
+        ToolInfo {
+            name: "urlfinder",
+            binary: "urlfinder",
+            description: "Passive URL discovery from archives",
+            is_core: false,
+            install_cmd: "go install -v github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest",
+        },
+        ToolInfo {
+            name: "katana",
+            binary: "katana",
+            description: "Fast web crawler",
+            is_core: false,
+            install_cmd: "go install -v github.com/projectdiscovery/katana/cmd/katana@latest",
+        },
+        ToolInfo {
+            name: "gau",
+            binary: "gau",
+            description: "Fetch URLs from web archives",
+            is_core: false,
+            install_cmd: "go install -v github.com/lc/gau/v2/cmd/gau@latest",
+        },
+        ToolInfo {
+            name: "waybackurls",
+            binary: "waybackurls",
+            description: "Fetch URLs from Wayback Machine",
+            is_core: false,
+            install_cmd: "go install -v github.com/tomnomnom/waybackurls@latest",
+        },
+    ]
+}
+
+/// Check if a tool is installed and get its version
+async fn check_tool_installed(binary: &str) -> (bool, Option<String>) {
+    // First check if the tool exists
+    let which_result = std::process::Command::new("which")
+        .arg(binary)
+        .output();
+
+    if which_result.is_err() || !which_result.unwrap().status.success() {
+        return (false, None);
+    }
+
+    // Try to get version
+    let version = get_tool_version(binary).await;
+    (true, version)
+}
+
+/// Get tool version by running it with --version or -version flag
+async fn get_tool_version(binary: &str) -> Option<String> {
+    // Try --version first
+    if let Ok(output) = Command::new(binary)
+        .arg("--version")
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let version_str = if !stdout.trim().is_empty() { stdout } else { stderr };
+            // Extract first line and clean it
+            if let Some(line) = version_str.lines().next() {
+                return Some(line.trim().to_string());
+            }
+        }
+    }
+
+    // Try -version for some tools
+    if let Ok(output) = Command::new(binary)
+        .arg("-version")
+        .output()
+        .await
+    {
+        if output.status.success() {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            let version_str = if !stdout.trim().is_empty() { stdout } else { stderr };
+            if let Some(line) = version_str.lines().next() {
+                return Some(line.trim().to_string());
+            }
+        }
+    }
+
+    None
+}
+
+/// Check and display status of all tools
+async fn check_tools_status() {
+    println!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".cyan().bold());
+    println!("{}", "║                        ENUMRUST - TOOL STATUS CHECK                          ║".cyan().bold());
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+    println!();
+
+    let tools = get_tools_list();
+
+    // Check Go installation first
+    let go_installed = std::process::Command::new("which")
+        .arg("go")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !go_installed {
+        println!("{}", "⚠️  Go is NOT installed! Most tools require Go to install.".red().bold());
+        println!("{}", "   Install Go from: https://go.dev/dl/".yellow());
+        println!("{}", "   Or run: apt-get install golang-go".yellow());
+        println!();
+    } else {
+        println!("{}", "✓ Go is installed".green());
+        println!();
+    }
+
+    // Core tools
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+    println!("{}", "  CORE TOOLS (Required)".white().bold());
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+
+    let mut core_missing = 0;
+    let mut optional_missing = 0;
+
+    for tool in tools.iter().filter(|t| t.is_core) {
+        let (installed, version) = check_tool_installed(tool.binary).await;
+        print_tool_status(tool, installed, version.as_deref());
+        if !installed {
+            core_missing += 1;
+        }
+    }
+
+    // Optional tools
+    println!();
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+    println!("{}", "  OPTIONAL TOOLS".white().bold());
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+
+    for tool in tools.iter().filter(|t| !t.is_core) {
+        let (installed, version) = check_tool_installed(tool.binary).await;
+        print_tool_status(tool, installed, version.as_deref());
+        if !installed {
+            optional_missing += 1;
+        }
+    }
+
+    // Summary
+    println!();
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+    println!("{}", "║  SUMMARY                                                                     ║".cyan().bold());
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+
+    if core_missing > 0 {
+        println!("{}", format!("  ⚠️  {} core tool(s) missing - some features won't work!", core_missing).red().bold());
+    } else {
+        println!("{}", "  ✓ All core tools installed!".green().bold());
+    }
+
+    if optional_missing > 0 {
+        println!("{}", format!("  ℹ️  {} optional tool(s) missing", optional_missing).yellow());
+    }
+
+    println!();
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+    println!("{}", "║  To install missing tools, run:                                              ║".cyan());
+    println!("{}", "║    enumrust --install-tools                                                  ║".green());
+    println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".cyan().bold());
+}
+
+/// Print status of a single tool
+fn print_tool_status(tool: &ToolInfo, installed: bool, version: Option<&str>) {
+    let status_icon = if installed { "✓".green() } else { "✗".red() };
+    let name_colored = if installed {
+        tool.name.green()
+    } else {
+        tool.name.red()
+    };
+
+    let version_str = if let Some(v) = version {
+        // Truncate version to 40 chars max
+        let truncated = if v.len() > 40 { &v[..40] } else { v };
+        format!("({})", truncated).dimmed().to_string()
+    } else {
+        "".to_string()
+    };
+
+    println!(
+        "  {} {:<15} - {:<40} {}",
+        status_icon,
+        name_colored,
+        tool.description,
+        version_str
+    );
+}
+
+/// Install all required tools
+async fn install_all_tools() -> Result<()> {
+    println!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".green().bold());
+    println!("{}", "║                      ENUMRUST - INSTALLING TOOLS                             ║".green().bold());
+    println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".green().bold());
+    println!();
+
+    // Check if Go is installed
+    let go_installed = std::process::Command::new("which")
+        .arg("go")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if !go_installed {
+        println!("{}", "⚠️  Go is NOT installed! Installing Go first...".yellow().bold());
+        println!();
+
+        // Try to install Go
+        let go_install = Command::new("sh")
+            .arg("-c")
+            .arg("apt-get update && apt-get install -y golang-go")
+            .status()
+            .await;
+
+        match go_install {
+            Ok(status) if status.success() => {
+                println!("{}", "✓ Go installed successfully!".green());
+            }
+            _ => {
+                println!("{}", "✗ Failed to install Go automatically.".red());
+                println!("{}", "  Please install Go manually from: https://go.dev/dl/".yellow());
+                println!("{}", "  Then run this command again.".yellow());
+                return Ok(());
+            }
+        }
+        println!();
+    }
+
+    // Configure GOPATH and PATH
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let gopath = format!("{}/go", home);
+    let gobin = format!("{}/bin", gopath);
+
+    // Ensure go/bin directory exists
+    let _ = fs::create_dir_all(&gobin);
+
+    // Update PATH for this session
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    if !current_path.contains(&gobin) {
+        std::env::set_var("PATH", format!("{}:{}", gobin, current_path));
+    }
+    std::env::set_var("GOPATH", &gopath);
+
+    println!("{}", format!("📁 GOPATH: {}", gopath).cyan());
+    println!("{}", format!("📁 GOBIN:  {}", gobin).cyan());
+    println!();
+
+    let tools = get_tools_list();
+    let mut installed_count = 0;
+    let mut failed_count = 0;
+    let mut skipped_count = 0;
+
+    for tool in &tools {
+        // Check if already installed
+        let (already_installed, _) = check_tool_installed(tool.binary).await;
+
+        if already_installed {
+            println!("{}", format!("⏭️  {} - already installed, skipping", tool.name).dimmed());
+            skipped_count += 1;
+            continue;
+        }
+
+        println!("{}", format!("📦 Installing {}...", tool.name).cyan().bold());
+        println!("{}", format!("   {}", tool.description).dimmed());
+
+        let install_result = Command::new("sh")
+            .arg("-c")
+            .arg(tool.install_cmd)
+            .env("GOPATH", &gopath)
+            .env("PATH", format!("{}:{}", gobin, std::env::var("PATH").unwrap_or_default()))
+            .status()
+            .await;
+
+        match install_result {
+            Ok(status) if status.success() => {
+                // Verify installation
+                let (now_installed, version) = check_tool_installed(tool.binary).await;
+                if now_installed {
+                    let ver_str = version.unwrap_or_else(|| "version unknown".to_string());
+                    println!("{}", format!("   ✓ {} installed successfully! ({})", tool.name, ver_str).green());
+                    installed_count += 1;
+                } else {
+                    println!("{}", format!("   ⚠️  {} - command succeeded but binary not found in PATH", tool.name).yellow());
+                    println!("{}", format!("      Try adding {} to your PATH", gobin).yellow());
+                    failed_count += 1;
+                }
+            }
+            _ => {
+                println!("{}", format!("   ✗ Failed to install {}", tool.name).red());
+                println!("{}", format!("      Manual install: {}", tool.install_cmd).dimmed());
+                failed_count += 1;
+            }
+        }
+        println!();
+    }
+
+    // Update nuclei templates if nuclei was installed
+    let (nuclei_installed, _) = check_tool_installed("nuclei").await;
+    if nuclei_installed {
+        println!("{}", "📥 Updating nuclei templates...".cyan());
+        let _ = Command::new("nuclei")
+            .arg("-ut")
+            .status()
+            .await;
+        println!("{}", "   ✓ Nuclei templates updated".green());
+        println!();
+    }
+
+    // Auto-configure PATH in shell config files
+    let path_configured = configure_shell_path(&gobin).await;
+
+    // Summary
+    println!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".green().bold());
+    println!("{}", "║                         INSTALLATION COMPLETE                                ║".green().bold());
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".green().bold());
+    println!("{}", format!("║  ✓ Installed: {:<62}║", installed_count).green());
+    println!("{}", format!("║  ⏭️  Skipped:  {:<62}║", skipped_count).dimmed());
+    if failed_count > 0 {
+        println!("{}", format!("║  ✗ Failed:    {:<62}║", failed_count).red());
+    }
+    println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".green().bold());
+
+    if path_configured {
+        println!("{}", "║  ✓ PATH configured automatically in shell config files                      ║".green());
+        println!("{}", "║                                                                              ║".cyan());
+        println!("{}", "║  To apply changes NOW, run:                                                  ║".cyan());
+        println!("{}", "║    source ~/.bashrc   OR   source ~/.zshrc                                   ║".yellow());
+        println!("{}", "║                                                                              ║".cyan());
+        println!("{}", "║  Or simply open a new terminal window.                                       ║".cyan());
+    } else {
+        println!("{}", "║  ℹ️  PATH already configured or couldn't be auto-configured                  ║".yellow());
+    }
+    println!("{}", "║                                                                              ║".cyan());
+    println!("{}", "║  Verify installation with:                                                   ║".cyan());
+    println!("{}", "║    enumrust --check-tools                                                    ║".green());
+    println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".green().bold());
+
+    Ok(())
+}
+
+/// Configure PATH in shell configuration files (.bashrc, .zshrc, .profile)
+async fn configure_shell_path(gobin: &str) -> bool {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+
+    // Export line to add
+    let export_line = format!("export PATH=\"$PATH:{}\"", gobin);
+    let marker = "# EnumRust Go binaries PATH";
+    let full_block = format!("\n{}\n{}\n", marker, export_line);
+
+    let shell_configs = vec![
+        format!("{}/.bashrc", home),
+        format!("{}/.zshrc", home),
+        format!("{}/.profile", home),
+    ];
+
+    let mut configured = false;
+
+    for config_path in shell_configs {
+        let path = Path::new(&config_path);
+
+        // Skip if file doesn't exist
+        if !path.exists() {
+            continue;
+        }
+
+        // Read current content
+        let content = match fs::read_to_string(path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        // Skip if already configured (check for marker or the gobin path)
+        if content.contains(marker) || content.contains(gobin) {
+            println!("{}", format!("   ℹ️  PATH already in {}", config_path).dimmed());
+            continue;
+        }
+
+        // Append the export line
+        let mut file = match OpenOptions::new().append(true).open(path) {
+            Ok(f) => f,
+            Err(_) => continue,
+        };
+
+        if file.write_all(full_block.as_bytes()).is_ok() {
+            println!("{}", format!("   ✓ Added PATH to {}", config_path).green());
+            configured = true;
+        }
+    }
+
+    // Also try to update current session's PATH via /etc/profile.d if we have permissions
+    let profile_d = "/etc/profile.d/enumrust-go.sh";
+    if !Path::new(profile_d).exists() {
+        let profile_content = format!("#!/bin/sh\n{}\n{}\n", marker, export_line);
+        if fs::write(profile_d, profile_content).is_ok() {
+            let _ = std::process::Command::new("chmod")
+                .args(["+x", profile_d])
+                .output();
+            println!("{}", format!("   ✓ Created system-wide profile: {}", profile_d).green());
+            configured = true;
+        }
+    }
+
+    configured
 }

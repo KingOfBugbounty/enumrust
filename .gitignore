@@ -50,6 +50,17 @@ nuclei_output/
 *.io/
 *.dev/
 *.app/
+*.nl/
+*.me/
+*.eu/
+*.gg/
+*.player/
+
+# Scan result directories (any folder with dots that looks like a domain)
+*.*.*/
+
+# Specific scan outputs to ignore
+paused.conf
 
 # TruffleHog checkpoints
 trufflehog_checkpoint*.json
