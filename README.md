@@ -239,21 +239,118 @@ example.com/
 
 ---
 
-## 🛠️ Dependencies
+## 🛠️ Tool Installation
 
-### Required Tools
-- [haktrails](https://github.com/projectdiscovery/haktrails) - Subdomain discovery
-- [subfinder](https://github.com/projectdiscovery/subfinder) - Subdomain enumeration
-- [dnsx](https://github.com/projectdiscovery/dnsx) - DNS resolution
-- [masscan](https://github.com/robertdavidgraham/masscan) - Fast port scanner
-- [httpx](https://github.com/projectdiscovery/httpx) - HTTP toolkit
-- [nuclei](https://github.com/projectdiscovery/nuclei) - Vulnerability scanner
-- [feroxbuster](https://github.com/epi052/feroxbuster) - Directory bruteforce
+### Automatic Installation (Recommended)
 
-### Installation Script
+EnumRust includes built-in tool management. Install all required tools with a single command:
+
 ```bash
-# Install all dependencies
+# Install ALL required tools automatically
 ./target/release/enumrust --install-tools
+```
+
+This will:
+- ✅ Install Go if not present
+- ✅ Install all 19 security tools
+- ✅ Configure PATH automatically in `.bashrc`, `.zshrc`, `.profile`
+- ✅ Update Nuclei templates
+- ✅ Skip already installed tools
+
+### Check Tool Status
+
+Verify which tools are installed:
+
+```bash
+./target/release/enumrust --check-tools
+```
+
+Example output:
+```
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  CORE TOOLS (Required)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ httpx           - HTTP probing and validation
+  ✓ dnsx            - DNS resolution and validation
+  ✓ nuclei          - Vulnerability scanner
+  ✓ masscan         - Port scanner (requires sudo)
+
+  OPTIONAL TOOLS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  ✓ subfinder       - Passive subdomain discovery
+  ✓ haktrails       - SecurityTrails subdomain discovery
+  ✓ tlsx            - TLS/SSL certificate analysis
+  ✓ ffuf            - Fast web fuzzer
+  ✓ feroxbuster     - Recursive directory brute-forcer
+  ✓ trufflehog      - Secret scanner
+  ...
+```
+
+### Required Tools List
+
+| Tool | Category | Description |
+|------|----------|-------------|
+| **httpx** | Core | HTTP probing and validation |
+| **dnsx** | Core | DNS resolution and validation |
+| **nuclei** | Core | Vulnerability scanner |
+| **masscan** | Core | Fast port scanner (requires sudo) |
+| subfinder | Discovery | Passive subdomain enumeration |
+| haktrails | Discovery | SecurityTrails integration |
+| tlsx | Discovery | TLS/SSL certificate analysis |
+| ffuf | Fuzzing | Fast web fuzzer |
+| feroxbuster | Fuzzing | Recursive directory brute-forcer |
+| trufflehog | Secrets | Secret/credential scanner |
+| anew | Utils | Append unique lines to files |
+| jq | Utils | JSON processor |
+| whois | Utils | Domain registration lookup |
+| tmux | Utils | Terminal multiplexer |
+| hakrawler | Crawling | Web crawler for URL discovery |
+| urlfinder | Crawling | Passive URL discovery |
+| katana | Crawling | Fast web crawler |
+| gau | Crawling | Fetch URLs from web archives |
+| waybackurls | Crawling | Fetch URLs from Wayback Machine |
+
+### Manual Installation (Alternative)
+
+If you prefer manual installation:
+
+```bash
+# Install Go first (required for most tools)
+apt-get install -y golang-go
+
+# Core tools
+go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
+go install -v github.com/projectdiscovery/dnsx/cmd/dnsx@latest
+go install -v github.com/projectdiscovery/nuclei/v3/cmd/nuclei@latest
+apt-get install -y masscan
+
+# Discovery tools
+go install -v github.com/projectdiscovery/subfinder/v2/cmd/subfinder@latest
+go install -v github.com/hakluke/haktrails@latest
+go install -v github.com/projectdiscovery/tlsx/cmd/tlsx@latest
+
+# Fuzzing tools
+go install -v github.com/ffuf/ffuf/v2@latest
+cargo install feroxbuster  # or: apt-get install feroxbuster
+
+# Crawling tools
+go install -v github.com/hakluke/hakrawler@latest
+go install -v github.com/projectdiscovery/urlfinder/cmd/urlfinder@latest
+go install -v github.com/projectdiscovery/katana/cmd/katana@latest
+go install -v github.com/lc/gau/v2/cmd/gau@latest
+go install -v github.com/tomnomnom/waybackurls@latest
+
+# Utils
+go install -v github.com/tomnomnom/anew@latest
+go install -v github.com/trufflesecurity/trufflehog/v3@latest
+apt-get install -y jq whois tmux
+
+# Add Go binaries to PATH
+echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
+source ~/.bashrc
+
+# Update Nuclei templates
+nuclei -ut
 ```
 
 ---
