@@ -1234,8 +1234,9 @@
             const [isAuthenticated, setIsAuthenticated] = useState(false);
             const [token, setToken] = useState(null);
             const [username, setUsername] = useState('');
-            const [setupCompleted, setSetupCompleted] = useState(null);
+            const [mustChangePassword, setMustChangePassword] = useState(false);
             const [checkingSetup, setCheckingSetup] = useState(true);
+            const [isFirstAccess, setIsFirstAccess] = useState(false);
 
             useEffect(() => {
                 checkSetupStatus();
@@ -1243,7 +1244,7 @@
                 const savedUsername = localStorage.getItem('username');
                 if (savedToken) {
                     setToken(savedToken);
-                    setUsername(savedUsername || 'Usuário');
+                    setUsername(savedUsername || 'User');
                     setIsAuthenticated(true);
                 }
             }, []);
@@ -1253,32 +1254,38 @@
                     const response = await fetch(`${API_URL}/api/setup/status`);
                     if (response.ok) {
                         const data = await response.json();
-                        setSetupCompleted(data.setup_completed);
+                        setIsFirstAccess(data.must_change_password);
                     }
                 } catch (err) {
                     console.error('Error checking setup status:', err);
-                    setSetupCompleted(false);
                 } finally {
                     setCheckingSetup(false);
                 }
             };
 
-            const handleSetupComplete = () => {
-                setSetupCompleted(true);
-            };
-
-            const handleLogin = (authToken, user) => {
+            const handleLogin = (authToken, user, needsPasswordChange) => {
                 setToken(authToken);
                 setUsername(user);
-                setIsAuthenticated(true);
                 localStorage.setItem('authToken', authToken);
                 localStorage.setItem('username', user);
+                if (needsPasswordChange) {
+                    setMustChangePassword(true);
+                } else {
+                    setIsAuthenticated(true);
+                }
+            };
+
+            const handlePasswordChanged = () => {
+                setMustChangePassword(false);
+                setIsAuthenticated(true);
+                setIsFirstAccess(false);
             };
 
             const handleLogout = () => {
                 setToken(null);
                 setUsername('');
                 setIsAuthenticated(false);
+                setMustChangePassword(false);
                 localStorage.removeItem('authToken');
                 localStorage.removeItem('username');
             };
@@ -1288,152 +1295,136 @@
                     <div className="login-container">
                         <div className="login-box" style={{textAlign: 'center'}}>
                             <i className="fas fa-spinner fa-spin" style={{fontSize: '48px', color: 'var(--primary-green)'}}></i>
-                            <p style={{marginTop: '20px', color: 'var(--text-gray)'}}>Verificando configuração...</p>
+                            <p style={{marginTop: '20px', color: 'var(--text-gray)'}}>Loading...</p>
                         </div>
                     </div>
                 );
             }
 
-            if (setupCompleted === false) {
-                return <SetupPage onSetupComplete={handleSetupComplete} />;
+            if (mustChangePassword && token) {
+                return <ForcePasswordChange token={token} username={username} onPasswordChanged={handlePasswordChanged} />;
             }
 
             if (!isAuthenticated) {
-                return <LoginPage onLogin={handleLogin} />;
+                return <LoginPage onLogin={handleLogin} isFirstAccess={isFirstAccess} />;
             }
 
             return <Dashboard token={token} username={username} onLogout={handleLogout} />;
         }
 
-        // Setup Component (First-Time Access)
-        function SetupPage({ onSetupComplete }) {
-            const [setupCode, setSetupCode] = useState('');
-            const [username, setUsername] = useState('');
-            const [password, setPassword] = useState('');
+        // Force Password Change Component
+        function ForcePasswordChange({ token, username, onPasswordChanged }) {
+            const [currentPassword, setCurrentPassword] = useState('');
+            const [newPassword, setNewPassword] = useState('');
             const [confirmPassword, setConfirmPassword] = useState('');
             const [error, setError] = useState('');
-            const [success, setSuccess] = useState('');
             const [loading, setLoading] = useState(false);
 
             const handleSubmit = async (e) => {
                 e.preventDefault();
                 setError('');
-                setSuccess('');
 
-                if (password !== confirmPassword) {
-                    setError('As senhas não coincidem!');
+                if (newPassword !== confirmPassword) {
+                    setError('Passwords do not match!');
                     return;
                 }
 
-                if (password.length < 8) {
-                    setError('A senha deve ter pelo menos 8 caracteres!');
+                if (newPassword.length < 8) {
+                    setError('New password must be at least 8 characters!');
                     return;
                 }
 
-                if (username.length < 3) {
-                    setError('O usuário deve ter pelo menos 3 caracteres!');
+                if (currentPassword === newPassword) {
+                    setError('New password must be different from the current password!');
                     return;
                 }
 
                 setLoading(true);
 
                 try {
-                    const response = await fetch(`${API_URL}/api/setup/initial`, {
+                    const response = await fetch(`${API_URL}/api/auth/change-password`, {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ setup_code: setupCode, username, password }),
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': `Bearer ${token}`,
+                        },
+                        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
                     });
 
                     const data = await response.json();
 
-                    if (response.ok && data.success) {
-                        setSuccess(data.message);
-                        setTimeout(() => {
-                            onSetupComplete();
-                        }, 2000);
+                    if (data.success) {
+                        onPasswordChanged();
                     } else {
-                        setError(data.message || 'Erro ao realizar configuração inicial.');
+                        setError(data.message || 'Failed to change password.');
                     }
                 } catch (err) {
-                    setError('Erro ao conectar com o servidor. Tente novamente.');
+                    setError('Failed to connect to server. Please try again.');
                 } finally {
                     setLoading(false);
                 }
             };
 
             return (
-                <div className="setup-container">
-                    <div className="setup-box">
-                        <div className="setup-logo">
-                            <i className="fas fa-rocket"></i>
+                <div className="login-container">
+                    <div className="login-box" style={{ maxWidth: '450px' }}>
+                        <div className="login-logo">
+                            <i className="fas fa-key" style={{ color: '#f5576c' }}></i>
                         </div>
-                        <h1>Primeiro Acesso</h1>
-                        <div className="setup-subtitle">
-                            Configure sua conta de administrador para começar a usar o EnumRust Security Dashboard
+                        <h1>Password Change Required</h1>
+                        <div className="login-subtitle">
+                            You are using the default password. Please set a new password to continue.
                         </div>
 
-                        <div className="setup-code-display">
-                            <div className="label">Código de Setup</div>
-                            <div className="code">REMOVED_CODE</div>
+                        <div style={{
+                            background: 'rgba(245, 87, 108, 0.1)',
+                            border: '1px solid rgba(245, 87, 108, 0.3)',
+                            borderRadius: '8px',
+                            padding: '12px 16px',
+                            marginBottom: '20px',
+                            fontSize: '13px',
+                            color: '#f5576c'
+                        }}>
+                            <i className="fas fa-exclamation-triangle"></i> For security reasons, you must change the default password before accessing the dashboard.
                         </div>
 
                         {error && <div className="error-message"><i className="fas fa-exclamation-triangle"></i> {error}</div>}
-                        {success && <div className="success-message"><i className="fas fa-check-circle"></i> {success}</div>}
 
                         <form onSubmit={handleSubmit}>
                             <div className="form-group">
-                                <label><i className="fas fa-key"></i> Código de Setup</label>
-                                <input
-                                    type="text"
-                                    value={setupCode}
-                                    onChange={(e) => setSetupCode(e.target.value)}
-                                    placeholder="Digite o código de setup"
-                                    required
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label><i className="fas fa-user-shield"></i> Nome de Usuário</label>
-                                <input
-                                    type="text"
-                                    value={username}
-                                    onChange={(e) => setUsername(e.target.value)}
-                                    placeholder="Escolha um nome de usuário (mín. 3 caracteres)"
-                                    required
-                                    minLength="3"
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Senha</label>
+                                <label><i className="fas fa-lock"></i> Current Password</label>
                                 <input
                                     type="password"
-                                    value={password}
-                                    onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="Escolha uma senha forte (mín. 8 caracteres)"
+                                    value={currentPassword}
+                                    onChange={(e) => setCurrentPassword(e.target.value)}
+                                    placeholder="Enter current password"
+                                    required
+                                />
+                            </div>
+                            <div className="form-group">
+                                <label><i className="fas fa-lock"></i> New Password</label>
+                                <input
+                                    type="password"
+                                    value={newPassword}
+                                    onChange={(e) => setNewPassword(e.target.value)}
+                                    placeholder="Enter new password (min. 8 characters)"
                                     required
                                     minLength="8"
                                 />
                             </div>
                             <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Confirmar Senha</label>
+                                <label><i className="fas fa-lock"></i> Confirm New Password</label>
                                 <input
                                     type="password"
                                     value={confirmPassword}
                                     onChange={(e) => setConfirmPassword(e.target.value)}
-                                    placeholder="Confirme sua senha"
+                                    placeholder="Confirm new password"
                                     required
                                     minLength="8"
                                 />
                             </div>
-                            <div className="password-requirements">
-                                <strong>Requisitos de Segurança:</strong>
-                                <ul>
-                                    <li>Usuário: mínimo 3 caracteres</li>
-                                    <li>Senha: mínimo 8 caracteres</li>
-                                    <li>Use uma combinação de letras, números e símbolos</li>
-                                </ul>
-                            </div>
-                            <button type="submit" className="btn-login" disabled={loading} style={{marginTop: '25px'}}>
-                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Configurando...</> : <><i className="fas fa-rocket"></i> Criar Conta Admin</>}
+                            <button type="submit" className="btn-login" disabled={loading} style={{marginTop: '15px'}}>
+                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Changing...</> : <><i className="fas fa-save"></i> Change Password</>}
                             </button>
                         </form>
                     </div>
@@ -1442,7 +1433,7 @@
         }
 
         // Login Component
-        function LoginPage({ onLogin }) {
+        function LoginPage({ onLogin, isFirstAccess }) {
             const [username, setUsername] = useState('');
             const [password, setPassword] = useState('');
             const [error, setError] = useState('');
@@ -1462,12 +1453,12 @@
 
                     if (response.ok) {
                         const data = await response.json();
-                        onLogin(data.token, username);
+                        onLogin(data.token, username, data.must_change_password);
                     } else {
-                        setError('Credenciais inválidas. Verifique seu usuário e senha.');
+                        setError('Invalid credentials. Please check your username and password.');
                     }
                 } catch (err) {
-                    setError('Erro ao conectar com o servidor. Tente novamente.');
+                    setError('Failed to connect to server. Please try again.');
                 } finally {
                     setLoading(false);
                 }
@@ -1482,31 +1473,55 @@
                         <h1>EnumRust</h1>
                         <div className="login-subtitle">Security Dashboard - Enterprise Edition</div>
 
+                        {isFirstAccess && (
+                            <div style={{
+                                background: 'rgba(79, 172, 254, 0.1)',
+                                border: '1px solid rgba(79, 172, 254, 0.3)',
+                                borderRadius: '8px',
+                                padding: '14px 16px',
+                                marginBottom: '20px',
+                                fontSize: '13px',
+                                color: '#4facfe',
+                                textAlign: 'left'
+                            }}>
+                                <div style={{ fontWeight: '700', marginBottom: '8px', fontSize: '14px' }}>
+                                    <i className="fas fa-info-circle"></i> Default Credentials
+                                </div>
+                                <div style={{ fontFamily: 'monospace', lineHeight: '1.8' }}>
+                                    <div>Username: <strong style={{ color: '#fff' }}>admin</strong></div>
+                                    <div>Password: <strong style={{ color: '#fff' }}>enumrust</strong></div>
+                                </div>
+                                <div style={{ marginTop: '8px', fontSize: '11px', color: 'var(--text-gray)' }}>
+                                    You will be prompted to change the password after login.
+                                </div>
+                            </div>
+                        )}
+
                         {error && <div className="error-message"><i className="fas fa-exclamation-triangle"></i> {error}</div>}
 
                         <form onSubmit={handleSubmit}>
                             <div className="form-group">
-                                <label><i className="fas fa-user"></i> Usuário</label>
+                                <label><i className="fas fa-user"></i> Username</label>
                                 <input
                                     type="text"
                                     value={username}
                                     onChange={(e) => setUsername(e.target.value)}
-                                    placeholder="Digite seu usuário"
+                                    placeholder="Enter your username"
                                     required
                                 />
                             </div>
                             <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Senha</label>
+                                <label><i className="fas fa-lock"></i> Password</label>
                                 <input
                                     type="password"
                                     value={password}
                                     onChange={(e) => setPassword(e.target.value)}
-                                    placeholder="Digite sua senha"
+                                    placeholder="Enter your password"
                                     required
                                 />
                             </div>
                             <button type="submit" className="btn-login" disabled={loading}>
-                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Entrando...</> : <><i className="fas fa-sign-in-alt"></i> Entrar</>}
+                                {loading ? <><i className="fas fa-spinner fa-spin"></i> Signing in...</> : <><i className="fas fa-sign-in-alt"></i> Sign In</>}
                             </button>
                         </form>
                     </div>
@@ -1563,28 +1578,29 @@
                     totalDomains: domains.length,
                     criticalIssues: 0,
                     totalFindings: 0,
-                    lastScan: new Date().toLocaleDateString('pt-BR')
+                    lastScan: new Date().toLocaleDateString('en-US')
                 });
             };
 
             const tabs = [
-                { id: 'overview', name: 'Visão Geral', icon: 'fa-chart-pie' },
-                { id: 'progress', name: 'Scan em Andamento', icon: 'fa-spinner' },
-                { id: 'infrastructure', name: 'Infraestrutura', icon: 'fa-network-wired' },
-                { id: 'subdomains', name: 'Subdomínios', icon: 'fa-sitemap' },
-                { id: 'nuclei', name: 'Vulnerabilidades', icon: 'fa-bug' },
-                { id: 'vulnerabilities_detailed', name: 'Vulnerabilidades POC', icon: 'fa-shield-virus' },
+                { id: 'overview', name: 'Overview', icon: 'fa-chart-pie' },
+                { id: 'progress', name: 'Scan Progress', icon: 'fa-spinner' },
+                { id: 'infrastructure', name: 'Infrastructure', icon: 'fa-network-wired' },
+                { id: 'subdomains', name: 'Subdomains', icon: 'fa-sitemap' },
+                { id: 'nuclei', name: 'Vulnerabilities', icon: 'fa-bug' },
+                { id: 'vulnerabilities_detailed', name: 'Vulnerabilities POC', icon: 'fa-shield-virus' },
                 { id: 'github', name: 'GitHub Secrets', icon: 'fa-brands fa-github' },
                 { id: 'hardcoded', name: 'Hardcoded Secrets', icon: 'fa-shield-alt' },
                 { id: 'trufflehog', name: 'TruffleHog Secrets', icon: 'fa-user-secret' },
-                { id: 'js_endpoints', name: 'Endpoints JS', icon: 'fa-code' },
+                { id: 'js_endpoints', name: 'JS Endpoints', icon: 'fa-code' },
                 { id: 'packages', name: 'Packages & Dependencies', icon: 'fa-box' },
                 { id: 'dependency_confusion', name: 'Dependency Confusion', icon: 'fa-exclamation-triangle' },
-                { id: 'access_pages', name: 'Páginas Acessadas', icon: 'fa-file' },
+                { id: 'access_pages', name: 'Accessed Pages', icon: 'fa-file' },
                 { id: 's3_buckets', name: 'S3 Buckets', icon: 'fa-bucket' },
                 { id: 'http200', name: 'HTTP 200', icon: 'fa-check-circle' },
                 { id: 'http403', name: 'HTTP 403', icon: 'fa-ban' },
-                { id: 'settings', name: 'Configurações', icon: 'fa-cog' },
+                { id: 'files', name: 'Files', icon: 'fa-folder-open' },
+                { id: 'settings', name: 'Settings', icon: 'fa-cog' },
             ];
 
             return (
@@ -1632,12 +1648,12 @@
                 setSuccess('');
 
                 if (newPassword !== confirmPassword) {
-                    setError('As senhas não coincidem!');
+                    setError('Passwords do not match!');
                     return;
                 }
 
                 if (newPassword.length < 8) {
-                    setError('A nova senha deve ter pelo menos 8 caracteres!');
+                    setError('New password must be at least 8 characters!');
                     return;
                 }
 
@@ -1664,10 +1680,10 @@
                             onClose();
                         }, 2000);
                     } else {
-                        setError(data.message || 'Erro ao trocar senha.');
+                        setError(data.message || 'Error changing password.');
                     }
                 } catch (err) {
-                    setError('Erro ao conectar com o servidor. Tente novamente.');
+                    setError('Error connecting to server. Please try again.');
                 } finally {
                     setLoading(false);
                 }
@@ -1677,7 +1693,7 @@
                 <div className="modal-overlay" onClick={onClose}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()}>
                         <div className="modal-header">
-                            <h2 className="modal-title"><i className="fas fa-key"></i> Trocar Senha</h2>
+                            <h2 className="modal-title"><i className="fas fa-key"></i> Change Password</h2>
                             <button className="modal-close" onClick={onClose}>
                                 <i className="fas fa-times"></i>
                             </button>
@@ -1688,7 +1704,7 @@
 
                         <form onSubmit={handleSubmit}>
                             <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Senha Atual</label>
+                                <label><i className="fas fa-lock"></i> Current Password</label>
                                 <input
                                     type="password"
                                     value={currentPassword}
@@ -1698,18 +1714,18 @@
                                 />
                             </div>
                             <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Nova Senha</label>
+                                <label><i className="fas fa-lock"></i> New Password</label>
                                 <input
                                     type="password"
                                     value={newPassword}
                                     onChange={(e) => setNewPassword(e.target.value)}
-                                    placeholder="Digite sua nova senha (mín. 8 caracteres)"
+                                    placeholder="Enter new password (min. 8 characters)"
                                     required
                                     minLength="8"
                                 />
                             </div>
                             <div className="form-group">
-                                <label><i className="fas fa-lock"></i> Confirmar Nova Senha</label>
+                                <label><i className="fas fa-lock"></i> Confirm New Password</label>
                                 <input
                                     type="password"
                                     value={confirmPassword}
@@ -1720,18 +1736,18 @@
                                 />
                             </div>
                             <div className="password-requirements">
-                                <strong>Requisitos:</strong>
+                                <strong>Requirements:</strong>
                                 <ul>
-                                    <li>Senha: mínimo 8 caracteres</li>
-                                    <li>Use uma combinação de letras, números e símbolos</li>
+                                    <li>Password: minimum 8 characters</li>
+                                    <li>Use a combination of letters, numbers and symbols</li>
                                 </ul>
                             </div>
                             <div style={{display: 'flex', gap: '10px', marginTop: '25px'}}>
                                 <button type="submit" className="btn-login" disabled={loading} style={{flex: 1}}>
-                                    {loading ? <><i className="fas fa-spinner fa-spin"></i> Atualizando...</> : <><i className="fas fa-check"></i> Atualizar Senha</>}
+                                    {loading ? <><i className="fas fa-spinner fa-spin"></i> Updating...</> : <><i className="fas fa-check"></i> Update Password</>}
                                 </button>
                                 <button type="button" className="btn-secondary" onClick={onClose}>
-                                    <i className="fas fa-times"></i> Cancelar
+                                    <i className="fas fa-times"></i> Cancel
                                 </button>
                             </div>
                         </form>
@@ -1753,7 +1769,7 @@
                     </div>
 
                     <div className="domain-selector">
-                        <label><i className="fas fa-globe"></i> Domínio Alvo</label>
+                        <label><i className="fas fa-globe"></i> Target Domain</label>
                         <select value={selectedDomain} onChange={(e) => setSelectedDomain(e.target.value)}>
                             {domains.map((domain) => (
                                 <option key={domain} value={domain}>{domain}</option>
@@ -1762,7 +1778,7 @@
                     </div>
 
                     <div className="nav-section">
-                        <div className="nav-section-title">Navegação</div>
+                        <div className="nav-section-title">Navigation</div>
                         {tabs.map((tab) => (
                             <div
                                 key={tab.id}
@@ -1786,7 +1802,7 @@
                             </div>
                         </div>
                         <button className="btn-secondary" onClick={onChangePassword} style={{width: '100%', marginBottom: '10px'}}>
-                            <i className="fas fa-key"></i> Trocar Senha
+                            <i className="fas fa-key"></i> Change Password
                         </button>
                         <button className="btn-logout" onClick={onLogout}>
                             <i className="fas fa-sign-out-alt"></i> Sair
@@ -1832,6 +1848,8 @@
                         return <Http200Tab token={token} domain={domain} />;
                     case 'http403':
                         return <Http403Tab token={token} domain={domain} />;
+                    case 'files':
+                        return <FilesTab token={token} domain={domain} />;
                     case 'settings':
                         return <SettingsTab token={token} />;
                     default:
@@ -1863,7 +1881,7 @@
             const fetchRealData = async () => {
                 setLoading(true);
                 try {
-                    // Buscar dados gerais do domínio
+                    // Search dados gerais do domínio
                     const dataResponse = await fetch(`${API_URL}/api/domain/${encodeURIComponent(domain)}/data`, {
                         headers: { 'Authorization': `Bearer ${token}` },
                     });
@@ -1873,7 +1891,7 @@
                         setRealData(data);
                     }
 
-                    // Buscar subdomínios (usando endpoint estruturado para consistência)
+                    // Search subdomínios (usando endpoint estruturado para consistência)
                     const subResponse = await fetch(`${API_URL}/api/domain/${encodeURIComponent(domain)}/subdomains`, {
                         headers: { 'Authorization': `Bearer ${token}` },
                     });
@@ -1882,7 +1900,7 @@
                         setSubdomainsCount(subdomains.length);
                     }
 
-                    // Buscar secrets
+                    // Search secrets
                     const secretsResponse = await fetch(`${API_URL}/api/domain/${encodeURIComponent(domain)}/js_secrets`, {
                         headers: { 'Authorization': `Bearer ${token}` },
                     });
@@ -1891,7 +1909,7 @@
                         setSecretsCount(secrets.length);
                     }
 
-                    // Buscar S3 buckets
+                    // Search S3 buckets
                     const s3Response = await fetch(`${API_URL}/api/domain/${encodeURIComponent(domain)}/s3_buckets`, {
                         headers: { 'Authorization': `Bearer ${token}` },
                     });
@@ -1915,9 +1933,9 @@
                         id: 1,
                         type: 'critical',
                         icon: 'fa-exclamation-triangle',
-                        title: 'Vulnerabilidades Críticas Detectadas',
-                        message: `${realData.critical_vulns} vulnerabilidades de severidade crítica encontradas`,
-                        time: 'Agora'
+                        title: 'Critical Vulnerabilities Detected',
+                        message: `${realData.critical_vulns} critical severity vulnerabilities found`,
+                        time: 'Now'
                     });
                 }
                 if (realData.high_vulns > 0) {
@@ -1925,9 +1943,9 @@
                         id: 2,
                         type: 'warning',
                         icon: 'fa-shield-alt',
-                        title: 'Vulnerabilidades Altas',
-                        message: `${realData.high_vulns} vulnerabilidades de severidade alta detectadas`,
-                        time: 'Agora'
+                        title: 'High Vulnerabilities',
+                        message: `${realData.high_vulns} high severity vulnerabilities detected`,
+                        time: 'Now'
                     });
                 }
                 if (secretsCount > 0) {
@@ -1935,9 +1953,9 @@
                         id: 3,
                         type: 'warning',
                         icon: 'fa-key',
-                        title: 'Secrets Expostos Encontrados',
-                        message: `${secretsCount} secrets detectados em arquivos JavaScript`,
-                        time: 'Agora'
+                        title: 'Secrets Expostos Found',
+                        message: `${secretsCount} secrets detected in JavaScript files`,
+                        time: 'Now'
                     });
                 }
                 if (s3Count > 0) {
@@ -1946,8 +1964,8 @@
                         type: 'info',
                         icon: 'fa-cloud',
                         title: 'S3 Buckets Identificados',
-                        message: `${s3Count} buckets S3 descobertos durante a varredura`,
-                        time: 'Agora'
+                        message: `${s3Count} S3 buckets discovered during the scan`,
+                        time: 'Now'
                     });
                 }
             }
@@ -1956,7 +1974,7 @@
                 return (
                     <div className="loading-container">
                         <div className="loading-spinner"></div>
-                        <div className="loading-text">Carregando dados...</div>
+                        <div className="loading-text">Loading data...</div>
                     </div>
                 );
             }
@@ -1965,12 +1983,12 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-chart-pie"></i> Visão Geral - {domain}</h2>
+                            <h2><i className="fas fa-chart-pie"></i> Overview - {domain}</h2>
                             <span className="header-badge">Live</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchRealData}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-download"></i> Exportar
@@ -1983,7 +2001,7 @@
                             <div className="stat-header">
                                 <div>
                                     <div className="stat-value">{subdomainsCount}</div>
-                                    <div className="stat-label">Subdomínios Encontrados</div>
+                                    <div className="stat-label">Subdomains Found</div>
                                 </div>
                                 <div className="stat-icon info">
                                     <i className="fas fa-sitemap"></i>
@@ -1998,7 +2016,7 @@
                             <div className="stat-header">
                                 <div>
                                     <div className="stat-value">{realData?.critical_vulns || 0}</div>
-                                    <div className="stat-label">Vulnerabilidades Críticas</div>
+                                    <div className="stat-label">Critical Vulnerabilities</div>
                                 </div>
                                 <div className="stat-icon critical">
                                     <i className="fas fa-exclamation-triangle"></i>
@@ -2043,14 +2061,14 @@
                             <div className="stat-header">
                                 <div>
                                     <div className="stat-value">{realData?.total_ports || 0}</div>
-                                    <div className="stat-label">Portas Abertas</div>
+                                    <div className="stat-label">Open Ports</div>
                                 </div>
                                 <div className="stat-icon info">
                                     <i className="fas fa-network-wired"></i>
                                 </div>
                             </div>
                             <div className="stat-trend">
-                                <i className="fas fa-server"></i> Infraestrutura
+                                <i className="fas fa-server"></i> Infrastructure
                             </div>
                         </div>
 
@@ -2058,7 +2076,7 @@
                             <div className="stat-header">
                                 <div>
                                     <div className="stat-value">{realData?.high_vulns || 0}</div>
-                                    <div className="stat-label">Vulnerabilidades Altas</div>
+                                    <div className="stat-label">High Vulnerabilities</div>
                                 </div>
                                 <div className="stat-icon warning">
                                     <i className="fas fa-exclamation-circle"></i>
@@ -2105,7 +2123,7 @@
                                             <i className="fas fa-hand-pointer"></i> Clique para ver detalhes na aba {
                                                 alert.id === 4 || alert.title.includes('S3 Bucket') ? '"S3 Buckets"' :
                                                 alert.id === 3 || alert.title.includes('Secrets') ? '"Hardcoded Secrets"' :
-                                                '"Vulnerabilidades POC"'
+                                                '"Vulnerabilities POC"'
                                             }
                                         </div>
                                     </div>
@@ -2119,7 +2137,7 @@
                         <div className="data-card">
                             <div className="empty-state">
                                 <div className="empty-icon"><i className="fas fa-check-circle"></i></div>
-                                <div className="empty-text">Nenhum alerta crítico no momento</div>
+                                <div className="empty-text">No critical alerts at this time</div>
                             </div>
                         </div>
                     )}
@@ -2179,7 +2197,7 @@
                 return (
                     <div className="loading-container">
                         <div className="loading-spinner"></div>
-                        <div className="loading-text">Carregando progresso...</div>
+                        <div className="loading-text">Loading progress...</div>
                     </div>
                 );
             }
@@ -2201,7 +2219,7 @@
                                 {autoRefresh ? 'Auto-Refresh ON' : 'Auto-Refresh OFF'}
                             </button>
                             <button className="btn-action" onClick={fetchProgress}>
-                                <i className="fas fa-redo"></i> Atualizar Agora
+                                <i className="fas fa-redo"></i> Refresh Now
                             </button>
                         </div>
                     </div>
@@ -2217,7 +2235,7 @@
                         <div style={{ padding: '30px' }}>
                             <div style={{ marginBottom: '15px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                 <div style={{ fontSize: '14px', color: 'var(--text-gray)' }}>
-                                    <i className="fas fa-clock"></i> Última atualização: {progress?.last_update ? new Date(progress.last_update).toLocaleTimeString('pt-BR') : 'N/A'}
+                                    <i className="fas fa-clock"></i> Last update: {progress?.last_update ? new Date(progress.last_update).toLocaleTimeString('en-US') : 'N/A'}
                                 </div>
                                 <div style={{ fontSize: '24px', fontWeight: '700', color: getProgressColor(progress?.progress || 0) }}>
                                     {progress?.progress?.toFixed(1) || 0}%
@@ -2262,7 +2280,7 @@
                                     Status Atual
                                 </div>
                                 <div style={{ fontSize: '16px', fontWeight: '500' }}>
-                                    {progress?.current_message || 'Aguardando início do scan...'}
+                                    {progress?.current_message || 'Waiting for scan to start...'}
                                 </div>
                             </div>
 
@@ -2276,7 +2294,7 @@
                                         border: '1px solid rgba(34, 197, 94, 0.3)'
                                     }}>
                                         <div style={{ fontSize: '12px', color: 'var(--success)', marginBottom: '5px' }}>
-                                            <i className="fas fa-list-check"></i> Total de Eventos
+                                            <i className="fas fa-list-check"></i> Total Events
                                         </div>
                                         <div style={{ fontSize: '24px', fontWeight: '700', color: 'var(--success)' }}>
                                             {progress.total_events}
@@ -2301,11 +2319,11 @@
                         </div>
                     </div>
 
-                    {/* Histórico de Eventos */}
+                    {/* Event History */}
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-history"></i> Histórico de Eventos
+                                <i className="fas fa-history"></i> Event History
                                 <span className="data-card-count">Tempo Real</span>
                             </div>
                         </div>
@@ -2319,14 +2337,14 @@
                                         <div className="alert-title">Status Atual</div>
                                         <div className="alert-message">{progress.current_message}</div>
                                     </div>
-                                    <div className="alert-time">{new Date(progress.last_update).toLocaleTimeString('pt-BR')}</div>
+                                    <div className="alert-time">{new Date(progress.last_update).toLocaleTimeString('en-US')}</div>
                                 </div>
                             ) : (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-hourglass-start"></i></div>
                                     <div className="empty-text">Aguardando eventos do scan...</div>
                                     <div style={{ marginTop: '10px', fontSize: '14px', color: 'var(--text-gray)' }}>
-                                        Os eventos aparecerão aqui conforme o scan progride
+                                        Events will appear here as the scan progresses
                                     </div>
                                 </div>
                             )}
@@ -2431,7 +2449,7 @@
 
             const formatDate = (dateStr) => {
                 try {
-                    return new Date(dateStr).toLocaleString('pt-BR');
+                    return new Date(dateStr).toLocaleString('en-US');
                 } catch {
                     return dateStr;
                 }
@@ -2441,12 +2459,12 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-network-wired"></i> Infraestrutura</h2>
-                            <span className="header-badge">{stats.totalHosts} hosts descobertos</span>
+                            <h2><i className="fas fa-network-wired"></i> Infrastructure</h2>
+                            <span className="header-badge">{stats.totalHosts} hosts discovered</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-refresh" onClick={fetchInfrastructureData}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
@@ -2456,22 +2474,22 @@
                         <div className="stat-card" style={{ background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)' }}>
                             <div className="stat-icon"><i className="fas fa-tasks"></i></div>
                             <div className="stat-value">{stats.totalScans}</div>
-                            <div className="stat-label">Total de Scans</div>
+                            <div className="stat-label">Total Scans</div>
                         </div>
                         <div className="stat-card" style={{ background: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)' }}>
                             <div className="stat-icon"><i className="fas fa-server"></i></div>
                             <div className="stat-value">{stats.totalHosts}</div>
-                            <div className="stat-label">Hosts Ativos</div>
+                            <div className="stat-label">Active Hosts</div>
                         </div>
                         <div className="stat-card" style={{ background: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)' }}>
                             <div className="stat-icon"><i className="fas fa-ethernet"></i></div>
                             <div className="stat-value">{stats.totalPorts}</div>
-                            <div className="stat-label">Portas Abertas</div>
+                            <div className="stat-label">Open Ports</div>
                         </div>
                         <div className="stat-card" style={{ background: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)' }}>
                             <div className="stat-icon"><i className="fas fa-cogs"></i></div>
                             <div className="stat-value">{stats.totalServices}</div>
-                            <div className="stat-label">Serviços Identificados</div>
+                            <div className="stat-label">Identified Services</div>
                         </div>
                     </div>
 
@@ -2511,7 +2529,7 @@
                                 transition: 'all 0.3s'
                             }}
                         >
-                            <i className="fas fa-ethernet"></i> Portas ({ports.length})
+                            <i className="fas fa-ethernet"></i> Ports ({ports.length})
                         </button>
                         <button
                             onClick={() => setActiveView('services')}
@@ -2526,7 +2544,7 @@
                                 transition: 'all 0.3s'
                             }}
                         >
-                            <i className="fas fa-cogs"></i> Serviços ({services.length})
+                            <i className="fas fa-cogs"></i> Services ({services.length})
                         </button>
                     </div>
 
@@ -2535,7 +2553,7 @@
                         <i className="fas fa-search"></i>
                         <input
                             type="text"
-                            placeholder={`Buscar ${activeView === 'scans' ? 'scans' : activeView === 'ports' ? 'portas' : 'serviços'}...`}
+                            placeholder={`Search ${activeView === 'scans' ? 'scans' : activeView === 'ports' ? 'ports' : 'services'}...`}
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -2544,7 +2562,7 @@
                     {loading ? (
                         <div className="loading-state">
                             <div className="loading-spinner"></div>
-                            <div className="loading-text">Carregando dados de infraestrutura...</div>
+                            <div className="loading-text">Loading infrastructure data...</div>
                         </div>
                     ) : (
                         <>
@@ -2555,12 +2573,12 @@
                                         <thead>
                                             <tr>
                                                 <th>Scan ID</th>
-                                                <th>Alvo (Range)</th>
-                                                <th>Hosts Escaneados</th>
-                                                <th>Hosts Ativos</th>
-                                                <th>Portas Encontradas</th>
-                                                <th>Vulnerabilidades</th>
-                                                <th>Data/Hora</th>
+                                                <th>Target (Range)</th>
+                                                <th>Scanned Hosts</th>
+                                                <th>Active Hosts</th>
+                                                <th>Ports Found</th>
+                                                <th>Vulnerabilities</th>
+                                                <th>Date/Time</th>
                                             </tr>
                                         </thead>
                                         <tbody>
@@ -2607,7 +2625,7 @@
                                                     <td colSpan="7" style={{ textAlign: 'center', padding: '40px' }}>
                                                         <div className="empty-state">
                                                             <i className="fas fa-network-wired" style={{ fontSize: '48px', opacity: '0.3' }}></i>
-                                                            <div>Nenhum scan de infraestrutura encontrado</div>
+                                                            <div>No infrastructure scan found</div>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -2623,11 +2641,11 @@
                                     <table className="data-table">
                                         <thead>
                                             <tr>
-                                                <th>Porta</th>
+                                                <th>Port</th>
                                                 <th>Protocolo</th>
                                                 <th>Estado</th>
-                                                <th>Serviço</th>
-                                                <th>Versão</th>
+                                                <th>Service</th>
+                                                <th>Version</th>
                                                 <th>Banner</th>
                                             </tr>
                                         </thead>
@@ -2669,7 +2687,7 @@
                                                     <td colSpan="6" style={{ textAlign: 'center', padding: '40px' }}>
                                                         <div className="empty-state">
                                                             <i className="fas fa-ethernet" style={{ fontSize: '48px', opacity: '0.3' }}></i>
-                                                            <div>Nenhuma porta aberta encontrada</div>
+                                                            <div>No open port found</div>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -2678,7 +2696,7 @@
                                     </table>
                                     {filteredPorts.length > 100 && (
                                         <div style={{ textAlign: 'center', padding: '20px', color: 'var(--text-gray)' }}>
-                                            Mostrando 100 de {filteredPorts.length} portas. Use a busca para refinar.
+                                            Showing 100 of {filteredPorts.length} ports. Use search to filter.
                                         </div>
                                     )}
                                 </div>
@@ -2690,9 +2708,9 @@
                                     <table className="data-table">
                                         <thead>
                                             <tr>
-                                                <th>Serviço</th>
-                                                <th>Porta Padrão</th>
-                                                <th>Total de Hosts</th>
+                                                <th>Service</th>
+                                                <th>Default Port</th>
+                                                <th>Total Hosts</th>
                                                 <th>Hosts (IPs)</th>
                                             </tr>
                                         </thead>
@@ -2737,7 +2755,7 @@
                                                     <td colSpan="4" style={{ textAlign: 'center', padding: '40px' }}>
                                                         <div className="empty-state">
                                                             <i className="fas fa-cogs" style={{ fontSize: '48px', opacity: '0.3' }}></i>
-                                                            <div>Nenhum serviço identificado</div>
+                                                            <div>No service identified</div>
                                                         </div>
                                                     </td>
                                                 </tr>
@@ -2787,19 +2805,19 @@
 
             const copyToClipboard = (text) => {
                 navigator.clipboard.writeText(text);
-                alert('Copiado para a área de transferência!');
+                alert('Copied to clipboard!');
             };
 
             return (
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-sitemap"></i> Subdomínios</h2>
-                            <span className="header-badge">{filteredSubdomains.length} encontrados</span>
+                            <h2><i className="fas fa-sitemap"></i> Subdomains</h2>
+                            <span className="header-badge">{filteredSubdomains.length} found</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchSubdomains}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-download"></i> Exportar CSV
@@ -2811,7 +2829,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar subdomínio..."
+                            placeholder="🔍 Search subdomain..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -2828,7 +2846,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-list"></i> Lista de Subdomínios
+                                <i className="fas fa-list"></i> Subdomain List
                                 <span className="data-card-count">{filteredSubdomains.length}</span>
                             </div>
                             <div className="data-card-actions">
@@ -2841,22 +2859,22 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando dados...</div>
+                                    <div className="loading-text">Loading data...</div>
                                 </div>
                             ) : filteredSubdomains.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-inbox"></i></div>
-                                    <div className="empty-text">Nenhum subdomínio encontrado</div>
+                                    <div className="empty-text">No subdomain found</div>
                                 </div>
                             ) : (
                                 <table>
                                     <thead>
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
-                                            <th><i className="fas fa-globe"></i> Subdomínio</th>
+                                            <th><i className="fas fa-globe"></i> Subdomain</th>
                                             <th><i className="fas fa-network-wired"></i> IP</th>
                                             <th><i className="fas fa-certificate"></i> Status</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -2874,7 +2892,7 @@
                                                 </td>
                                                 <td>
                                                     <button className="btn-copy" onClick={() => copyToClipboard(sub.subdomain)}>
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -2965,15 +2983,15 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-bug"></i> Vulnerabilidades</h2>
-                            <span className="header-badge">{filteredVulns.length} detectadas</span>
+                            <h2><i className="fas fa-bug"></i> Vulnerabilities</h2>
+                            <span className="header-badge">{filteredVulns.length} detected</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchVulnerabilities}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
-                                <i className="fas fa-file-pdf"></i> Gerar Relatório
+                                <i className="fas fa-file-pdf"></i> Generate Report
                             </button>
                         </div>
                     </div>
@@ -2982,15 +3000,15 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar vulnerabilidade..."
+                            placeholder="🔍 Search vulnerability..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                         <select className="filter-select" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
-                            <option value="all">Todas Severidades</option>
-                            <option value="critical">Crítica</option>
-                            <option value="high">Alta</option>
-                            <option value="medium">Média</option>
+                            <option value="all">All Severities</option>
+                            <option value="critical">Critical</option>
+                            <option value="high">High</option>
+                            <option value="medium">Medium</option>
                             <option value="low">Baixa</option>
                             <option value="info">Info</option>
                         </select>
@@ -3002,7 +3020,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-shield-alt"></i> Análise de Segurança
+                                <i className="fas fa-shield-alt"></i> Security Analysis
                                 <span className="data-card-count">{filteredVulns.length}</span>
                             </div>
                         </div>
@@ -3015,7 +3033,7 @@
                             ) : filteredVulns.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-shield-check"></i></div>
-                                    <div className="empty-text">Nenhuma vulnerabilidade encontrada</div>
+                                    <div className="empty-text">No vulnerability found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -3023,9 +3041,9 @@
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
                                             <th><i className="fas fa-file-code"></i> Template</th>
-                                            <th><i className="fas fa-exclamation-circle"></i> Severidade</th>
+                                            <th><i className="fas fa-exclamation-circle"></i> Severity</th>
                                             <th><i className="fas fa-link"></i> URL Afetada</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -3057,7 +3075,7 @@
                                                     </td>
                                                     <td>
                                                         <button className="btn-copy" onClick={() => navigator.clipboard.writeText(matchedUrl)}>
-                                                            <i className="fas fa-copy"></i> Copiar
+                                                            <i className="fas fa-copy"></i> Copy
                                                         </button>
                                                     </td>
                                                 </tr>
@@ -3083,10 +3101,10 @@
                                         disabled={currentPage === 1}
                                         style={{opacity: currentPage === 1 ? 0.5 : 1}}
                                     >
-                                        <i className="fas fa-chevron-left"></i> Anterior
+                                        <i className="fas fa-chevron-left"></i> Previous
                                     </button>
                                     <span style={{color: 'var(--text-gray)', fontSize: '14px'}}>
-                                        Página {currentPage} de {totalPages} ({filteredVulns.length} total)
+                                        Page {currentPage} de {totalPages} ({filteredVulns.length} total)
                                     </span>
                                     <button
                                         className="btn-action"
@@ -3094,7 +3112,7 @@
                                         disabled={currentPage === totalPages}
                                         style={{opacity: currentPage === totalPages ? 0.5 : 1}}
                                     >
-                                        Próxima <i className="fas fa-chevron-right"></i>
+                                        Next <i className="fas fa-chevron-right"></i>
                                     </button>
                                 </div>
                             )}
@@ -3587,15 +3605,15 @@
         <>
             <div className="content-header">
                 <div className="header-title">
-                    <h2><i className="fas fa-shield-virus"></i> Vulnerabilidades Detalhadas</h2>
-                    <span className="header-badge">{filteredVulns.length} encontradas</span>
+                    <h2><i className="fas fa-shield-virus"></i> Detailed Vulnerabilities</h2>
+                    <span className="header-badge">{filteredVulns.length} found</span>
                 </div>
                 <div className="header-actions">
                     <button className="btn-action" onClick={fetchVulnerabilities}>
-                        <i className="fas fa-sync-alt"></i> Atualizar
+                        <i className="fas fa-sync-alt"></i> Refresh
                     </button>
                     <button className="btn-action">
-                        <i className="fas fa-file-pdf"></i> Gerar Relatório
+                        <i className="fas fa-file-pdf"></i> Generate Report
                     </button>
                 </div>
             </div>
@@ -3722,12 +3740,12 @@
                 <input
                     type="text"
                     className="search-input"
-                    placeholder="🔍 Buscar por nome, template ID ou URL..."
+                    placeholder="🔍 Search by name, template ID or URL..."
                     value={searchTerm}
                     onChange={(e) => setSearchTerm(e.target.value)}
                 />
                 <select className="filter-select" value={severityFilter} onChange={(e) => setSeverityFilter(e.target.value)}>
-                    <option value="all">Todas Severidades</option>
+                    <option value="all">All Severities</option>
                     <option value="critical">Critical</option>
                     <option value="high">High</option>
                     <option value="medium">Medium</option>
@@ -3740,12 +3758,12 @@
             {loading ? (
                 <div className="loading-container">
                     <div className="loading-spinner"></div>
-                    <div className="loading-text">Carregando vulnerabilidades...</div>
+                    <div className="loading-text">Loading vulnerabilidades...</div>
                 </div>
             ) : filteredVulns.length === 0 ? (
                 <div className="empty-state">
                     <div className="empty-icon"><i className="fas fa-shield-check"></i></div>
-                    <div className="empty-text">Nenhuma vulnerabilidade encontrada</div>
+                    <div className="empty-text">No vulnerability found</div>
                 </div>
             ) : (
                 <>
@@ -3833,7 +3851,7 @@
                                             alignItems: 'center',
                                             gap: '6px'
                                         }}>
-                                            <i className="fas fa-check-circle"></i> POC Disponível
+                                            <i className="fas fa-check-circle"></i> POC Available
                                         </span>
                                     )}
                                 </div>
@@ -3857,10 +3875,10 @@
                                 disabled={currentPage === 1}
                                 style={{opacity: currentPage === 1 ? 0.5 : 1}}
                             >
-                                <i className="fas fa-chevron-left"></i> Anterior
+                                <i className="fas fa-chevron-left"></i> Previous
                             </button>
                             <span style={{color: 'var(--text-gray)', fontSize: '14px', fontWeight: '600'}}>
-                                Página {currentPage} de {totalPages} ({filteredVulns.length} total)
+                                Page {currentPage} de {totalPages} ({filteredVulns.length} total)
                             </span>
                             <button
                                 className="btn-action"
@@ -3868,7 +3886,7 @@
                                 disabled={currentPage === totalPages}
                                 style={{opacity: currentPage === totalPages ? 0.5 : 1}}
                             >
-                                Próxima <i className="fas fa-chevron-right"></i>
+                                Next <i className="fas fa-chevron-right"></i>
                             </button>
                         </div>
                     )}
@@ -3943,13 +3961,13 @@
 
             const getValidationBadge = (secret) => {
                 if (!secret.validated) {
-                    return <span className="badge" style={{backgroundColor: '#6b7280', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>NÃO VALIDADO</span>;
+                    return <span className="badge" style={{backgroundColor: '#6b7280', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>NOT VALIDATED</span>;
                 }
                 const status = secret.validation_status || '';
                 if (status === 'ACTIVE') {
                     return <span className="badge" style={{backgroundColor: '#ef4444', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>ATIVO</span>;
                 } else if (status === 'INVALID') {
-                    return <span className="badge" style={{backgroundColor: '#22c55e', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>INVÁLIDO</span>;
+                    return <span className="badge" style={{backgroundColor: '#22c55e', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>INVALID</span>;
                 } else {
                     return <span className="badge" style={{backgroundColor: '#f59e0b', padding: '4px 8px', borderRadius: '4px', fontSize: '11px'}}>{status || 'UNKNOWN'}</span>;
                 }
@@ -3960,11 +3978,11 @@
                     <div className="content-header">
                         <div className="header-title">
                             <h2><i className="fas fa-key"></i> Secrets Expostos</h2>
-                            <span className="header-badge">{filteredSecrets.length} encontrados</span>
+                            <span className="header-badge">{filteredSecrets.length} found</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchSecrets}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-bell"></i> Configurar Alertas
@@ -3976,7 +3994,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar secret..."
+                            placeholder="🔍 Search secret..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -3985,7 +4003,7 @@
                             value={severityFilter}
                             onChange={(e) => setSeverityFilter(e.target.value)}
                         >
-                            <option value="all">Todas as Severidades</option>
+                            <option value="all">All Severities</option>
                             <option value="critical">Critical</option>
                             <option value="high">High</option>
                             <option value="medium">Medium</option>
@@ -4009,19 +4027,19 @@
                             ) : filteredSecrets.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-lock"></i></div>
-                                    <div className="empty-text">Nenhum secret encontrado</div>
+                                    <div className="empty-text">No secret found</div>
                                 </div>
                             ) : (
                                 <table>
                                     <thead>
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
-                                            <th><i className="fas fa-exclamation-triangle"></i> Severidade</th>
+                                            <th><i className="fas fa-exclamation-triangle"></i> Severity</th>
                                             <th><i className="fas fa-tag"></i> Tipo</th>
                                             <th><i className="fas fa-key"></i> Secret Preview</th>
                                             <th><i className="fas fa-link"></i> Origem</th>
-                                            <th><i className="fas fa-check-circle"></i> Validação</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-check-circle"></i> Validation</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -4075,7 +4093,7 @@
                                                         onClick={() => navigator.clipboard.writeText(secret.secret_value || secret.secret_preview || '')}
                                                         style={{padding: '4px 8px', fontSize: '12px'}}
                                                     >
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -4165,11 +4183,11 @@
                     <div className="content-header">
                         <div className="header-title">
                             <h2><i className="fas fa-shield-alt"></i> Hardcoded Secrets</h2>
-                            <span className="header-badge">{filteredSecrets.length} encontrados</span>
+                            <span className="header-badge">{filteredSecrets.length} found</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchSecrets}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
@@ -4178,7 +4196,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar por tipo, URL ou preview..."
+                            placeholder="🔍 Search by type, URL or preview..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -4187,7 +4205,7 @@
                             value={severityFilter}
                             onChange={(e) => setSeverityFilter(e.target.value)}
                         >
-                            <option value="all">Todas Severidades</option>
+                            <option value="all">All Severities</option>
                             <option value="critical">Critical</option>
                             <option value="high">High</option>
                             <option value="medium">Medium</option>
@@ -4196,11 +4214,11 @@
                     </div>
 
                     {loading ? (
-                        <div className="loading">Carregando...</div>
+                        <div className="loading">Loading...</div>
                     ) : filteredSecrets.length === 0 ? (
                         <div className="empty-state">
                             <i className="fas fa-shield-alt"></i>
-                            <p>Nenhum hardcoded secret encontrado</p>
+                            <p>No hardcoded secret found</p>
                         </div>
                     ) : (
                         <div className="data-grid">
@@ -4221,7 +4239,7 @@
                                         <p><strong>Preview:</strong> <code style={{backgroundColor: '#1e293b', padding: '4px 8px', borderRadius: '4px'}}>{secret.secret_preview}</code></p>
                                         <p><strong>Found in:</strong> <a href={secret.found_in_url} target="_blank" rel="noopener noreferrer" style={{color: '#3b82f6', textDecoration: 'none'}}>{secret.found_in_url}</a></p>
                                         <p><strong>Context:</strong> <code style={{fontSize: '12px', backgroundColor: '#1e293b', padding: '4px 8px', borderRadius: '4px', display: 'block', marginTop: '4px', wordBreak: 'break-all'}}>{secret.context}</code></p>
-                                        <p><strong>Discovered:</strong> {new Date(secret.discovered_at).toLocaleString('pt-BR')}</p>
+                                        <p><strong>Discovered:</strong> {new Date(secret.discovered_at).toLocaleString('en-US')}</p>
                                         {secret.validated && (
                                             <p style={{marginTop: '8px'}}>
                                                 <strong>Validation Status:</strong>
@@ -4330,9 +4348,9 @@
 
             const copyToClipboard = (text) => {
                 navigator.clipboard.writeText(text).then(() => {
-                    alert('Secret copiado para a área de transferência!');
+                    alert('Secret copied to clipboard!');
                 }).catch(err => {
-                    console.error('Erro ao copiar:', err);
+                    console.error('Error copying:', err);
                 });
             };
 
@@ -4341,11 +4359,11 @@
                     <div className="content-header">
                         <div className="header-title">
                             <h2><i className="fas fa-user-secret"></i> TruffleHog Secret Scanner</h2>
-                            <span className="header-badge">{filteredSecrets.length} encontrados</span>
+                            <span className="header-badge">{filteredSecrets.length} found</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchSecrets}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
@@ -4375,7 +4393,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar por tipo, arquivo ou secret..."
+                            placeholder="🔍 Search by type, file or secret..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -4391,12 +4409,12 @@
                     </div>
 
                     {loading ? (
-                        <div className="loading">Carregando...</div>
+                        <div className="loading">Loading...</div>
                     ) : filteredSecrets.length === 0 ? (
                         <div className="empty-state" style={{textAlign: 'center', padding: '3rem', color: '#4CAF50'}}>
                             <i className="fas fa-shield-alt" style={{fontSize: '4rem', marginBottom: '1rem'}}></i>
-                            <p style={{fontSize: '1.2rem', fontWeight: 'bold'}}>Nenhum secret encontrado pelo TruffleHog</p>
-                            <p style={{fontSize: '0.9rem', opacity: '0.7'}}>Isso é uma boa notícia! Não foram detectados secrets vazados.</p>
+                            <p style={{fontSize: '1.2rem', fontWeight: 'bold'}}>No secret found by TruffleHog</p>
+                            <p style={{fontSize: '0.9rem', opacity: '0.7'}}>This is good news! No leaked secrets were detected.</p>
                         </div>
                     ) : (
                         <div className="data-table-container">
@@ -4474,7 +4492,7 @@
                                                     className="btn-action"
                                                     style={{padding: '6px 12px', fontSize: '0.85rem'}}
                                                     onClick={() => copyToClipboard(secret.raw_secret)}
-                                                    title="Copiar secret completo"
+                                                    title="Copy secret completo"
                                                 >
                                                     <i className="fas fa-copy"></i>
                                                 </button>
@@ -4562,7 +4580,7 @@
                     }
                 } catch (err) {
                     console.error('Error downloading:', err);
-                    alert('Erro ao baixar wordlist');
+                    alert('Error downloading wordlist');
                 }
             };
 
@@ -4571,11 +4589,11 @@
                     <div className="content-header">
                         <div className="header-title">
                             <h2><i className="fas fa-code"></i> Endpoints JavaScript</h2>
-                            <span className="header-badge">{endpoints.length} total | {filteredEndpoints.length} exibidos</span>
+                            <span className="header-badge">{endpoints.length} total | {filteredEndpoints.length} displayed</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchEndpoints}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action btn-primary" onClick={handleDownload}>
                                 <i className="fas fa-download"></i> Download Wordlist TXT
@@ -4587,12 +4605,12 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar endpoint..."
+                            placeholder="🔍 Search endpoint..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                         <select className="filter-select">
-                            <option>Todos os Métodos</option>
+                            <option>All Methods</option>
                             <option>GET</option>
                             <option>POST</option>
                             <option>PUT</option>
@@ -4606,7 +4624,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-network-wired"></i> API Endpoints Descobertos
+                                <i className="fas fa-network-wired"></i> Discovered API Endpoints
                                 <span className="data-card-count">{filteredEndpoints.length}</span>
                             </div>
                         </div>
@@ -4614,12 +4632,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando endpoints...</div>
+                                    <div className="loading-text">Loading endpoints...</div>
                                 </div>
                             ) : filteredEndpoints.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-code-branch"></i></div>
-                                    <div className="empty-text">Nenhum endpoint encontrado</div>
+                                    <div className="empty-text">No endpoint found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -4627,9 +4645,9 @@
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
                                             <th><i className="fas fa-route"></i> Endpoint</th>
-                                            <th><i className="fas fa-tags"></i> Método</th>
+                                            <th><i className="fas fa-tags"></i> Method</th>
                                             <th><i className="fas fa-link"></i> Fonte</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -4647,7 +4665,7 @@
                                                 </td>
                                                 <td>
                                                     <button className="btn-copy" onClick={() => navigator.clipboard.writeText(ep.endpoint)}>
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -4712,7 +4730,7 @@
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchPackages}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
@@ -4733,7 +4751,7 @@
                             </div>
                             <div className="stat-content">
                                 <div className="stat-value">{confusionCount}</div>
-                                <div className="stat-label">Possível Dep. Confusion</div>
+                                <div className="stat-label">Possible Dep. Confusion</div>
                             </div>
                         </div>
                     </div>
@@ -4742,7 +4760,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar package..."
+                            placeholder="🔍 Search package..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -4757,7 +4775,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-boxes"></i> Packages Descobertos
+                                <i className="fas fa-boxes"></i> Discovered Packages
                                 <span className="data-card-count">{filteredPackages.length}</span>
                             </div>
                         </div>
@@ -4765,12 +4783,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando packages...</div>
+                                    <div className="loading-text">Loading packages...</div>
                                 </div>
                             ) : filteredPackages.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-box-open"></i></div>
-                                    <div className="empty-text">Nenhum package encontrado</div>
+                                    <div className="empty-text">No package found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -4814,7 +4832,7 @@
                                                         </span>
                                                     ) : (
                                                         <span style={{color: '#f44336'}}>
-                                                            <i className="fas fa-times-circle"></i> Não
+                                                            <i className="fas fa-times-circle"></i> No
                                                         </span>
                                                     )}
                                                 </td>
@@ -4825,7 +4843,7 @@
                                                         </span>
                                                     ) : (
                                                         <span style={{color: '#4CAF50'}}>
-                                                            <i className="fas fa-shield-alt"></i> Não
+                                                            <i className="fas fa-shield-alt"></i> No
                                                         </span>
                                                     )}
                                                 </td>
@@ -4895,20 +4913,20 @@
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchConfusions}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
 
                     {criticalCount > 0 && (
-                        <div style={{padding: '20px', background: '#fff3cd', border: '1px solid #ffc107', borderRadius: '8px', marginBottom: '20px'}}>
-                            <h3 style={{color: '#856404', margin: '0 0 10px 0'}}>
-                                <i className="fas fa-shield-virus"></i> ALERTA DE SEGURANÇA
+                        <div style={{padding: '20px', background: 'rgba(255, 82, 82, 0.1)', border: '1px solid rgba(255, 82, 82, 0.3)', borderRadius: '8px', marginBottom: '20px'}}>
+                            <h3 style={{color: '#ff5252', margin: '0 0 10px 0'}}>
+                                <i className="fas fa-shield-virus"></i> SECURITY ALERT
                             </h3>
-                            <p style={{color: '#856404', margin: 0}}>
-                                Foram encontrados <strong>{criticalCount} packages</strong> que não existem nos registros públicos.
-                                Isso pode indicar uma vulnerabilidade de <strong>Dependency Confusion</strong>, onde um atacante pode
-                                publicar um package malicioso com o mesmo nome e comprometer seu sistema.
+                            <p style={{color: 'var(--text-gray)', margin: 0}}>
+                                Found <strong style={{color: '#ff5252'}}>{criticalCount} packages</strong> that do not exist in public registries.
+                                This may indicate a <strong>Dependency Confusion</strong> vulnerability, where an attacker could
+                                publish a malicious package with the same name and compromise your system.
                             </p>
                         </div>
                     )}
@@ -4920,7 +4938,7 @@
                             </div>
                             <div className="stat-content">
                                 <div className="stat-value">{criticalCount}</div>
-                                <div className="stat-label">Total Vulnerabilidades</div>
+                                <div className="stat-label">Total Vulnerabilities</div>
                             </div>
                         </div>
                         <div className="stat-card">
@@ -4956,7 +4974,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar vulnerabilidade..."
+                            placeholder="🔍 Search vulnerability..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -4965,7 +4983,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-exclamation-circle"></i> Packages Vulneráveis
+                                <i className="fas fa-exclamation-circle"></i> Vulnerable Packages
                                 <span className="data-card-count">{filteredConfusions.length}</span>
                             </div>
                         </div>
@@ -4981,7 +4999,7 @@
                                         <i className="fas fa-check-circle"></i>
                                     </div>
                                     <div className="empty-text" style={{color: '#4CAF50'}}>
-                                        Nenhuma vulnerabilidade de Dependency Confusion encontrada! 🎉
+                                        No Dependency Confusion vulnerability found! 🎉
                                     </div>
                                 </div>
                             ) : (
@@ -4989,11 +5007,11 @@
                                     <thead>
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
-                                            <th><i className="fas fa-box"></i> Package Nome</th>
+                                            <th><i className="fas fa-box"></i> Package Name</th>
                                             <th><i className="fas fa-tag"></i> Tipo</th>
-                                            <th><i className="fas fa-code"></i> Contexto</th>
-                                            <th><i className="fas fa-link"></i> Arquivo Fonte</th>
-                                            <th><i className="fas fa-shield-alt"></i> Impacto</th>
+                                            <th><i className="fas fa-code"></i> Context</th>
+                                            <th><i className="fas fa-link"></i> Source File</th>
+                                            <th><i className="fas fa-shield-alt"></i> Impact</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5005,7 +5023,7 @@
                                                         <i className="fas fa-exclamation-triangle"></i> {conf.package_name}
                                                     </div>
                                                     <div style={{fontSize: '0.8em', color: '#666', marginTop: '4px'}}>
-                                                        Não encontrado no registry público
+                                                        Not found in public registry
                                                     </div>
                                                 </td>
                                                 <td>
@@ -5026,7 +5044,7 @@
                                                 </td>
                                                 <td>
                                                     <span style={{color: '#d32f2f', fontWeight: 'bold'}}>
-                                                        <i className="fas fa-radiation"></i> CRÍTICO
+                                                        <i className="fas fa-radiation"></i> CRITICAL
                                                     </span>
                                                 </td>
                                             </tr>
@@ -5077,12 +5095,12 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-file"></i> Páginas Acessadas</h2>
-                            <span className="header-badge">{filteredPages.length} páginas</span>
+                            <h2><i className="fas fa-file"></i> Accessed Pages</h2>
+                            <span className="header-badge">{filteredPages.length} pages</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchPages}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-download"></i> Exportar
@@ -5094,7 +5112,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar página..."
+                            placeholder="🔍 Search page..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -5112,7 +5130,7 @@
                     <div className="data-card">
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-browser"></i> Páginas Descobertas
+                                <i className="fas fa-browser"></i> Discovered Pages
                                 <span className="data-card-count">{filteredPages.length}</span>
                             </div>
                         </div>
@@ -5120,12 +5138,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando páginas...</div>
+                                    <div className="loading-text">Loading pages...</div>
                                 </div>
                             ) : filteredPages.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-file-alt"></i></div>
-                                    <div className="empty-text">Nenhuma página encontrada</div>
+                                    <div className="empty-text">No page found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -5135,7 +5153,7 @@
                                             <th><i className="fas fa-link"></i> URL</th>
                                             <th><i className="fas fa-file-code"></i> Content-Type</th>
                                             <th><i className="fas fa-signal"></i> Status</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5153,7 +5171,7 @@
                                                 </td>
                                                 <td>
                                                     <button className="btn-copy" onClick={() => navigator.clipboard.writeText(page.url)}>
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -5227,11 +5245,11 @@
                     <div className="content-header">
                         <div className="header-title">
                             <h2><i className="fas fa-cloud"></i> Cloud Storage & Buckets</h2>
-                            <span className="header-badge">{filteredStorage.length} encontrados</span>
+                            <span className="header-badge">{filteredStorage.length} found</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchCloudStorage}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                         </div>
                     </div>
@@ -5240,7 +5258,7 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar bucket ou URL..."
+                            placeholder="🔍 Search bucket or URL..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
@@ -5257,12 +5275,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Testando permissões de cloud storage...</div>
+                                    <div className="loading-text">Testing cloud storage permissions...</div>
                                 </div>
                             ) : filteredStorage.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-cloud-upload-alt"></i></div>
-                                    <div className="empty-text">Nenhum cloud storage encontrado ou testado</div>
+                                    <div className="empty-text">No cloud storage found or tested</div>
                                 </div>
                             ) : (
                                 <table>
@@ -5272,7 +5290,7 @@
                                             <th><i className="fas fa-bucket"></i> Nome do Bucket</th>
                                             <th><i className="fas fa-link"></i> URL</th>
                                             <th><i className="fas fa-search"></i> Fonte</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5296,7 +5314,7 @@
                                                     <button
                                                         className="btn-copy"
                                                         onClick={() => navigator.clipboard.writeText(storage.bucket_url)}
-                                                        title="Copiar URL"
+                                                        title="Copy URL"
                                                     >
                                                         <i className="fas fa-copy"></i>
                                                     </button>
@@ -5349,12 +5367,12 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-check-circle"></i> HTTP 200 - URLs Acessíveis</h2>
+                            <h2><i className="fas fa-check-circle"></i> HTTP 200 - Accessible URLs</h2>
                             <span className="header-badge">{filteredUrls.length} URLs</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchUrls}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-download"></i> Exportar
@@ -5366,12 +5384,12 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar URL..."
+                            placeholder="🔍 Search URL..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                         <button className="btn-filter">
-                            <i className="fas fa-search"></i> Buscar
+                            <i className="fas fa-search"></i> Search
                         </button>
                     </div>
 
@@ -5386,12 +5404,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando URLs...</div>
+                                    <div className="loading-text">Loading URLs...</div>
                                 </div>
                             ) : filteredUrls.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-link"></i></div>
-                                    <div className="empty-text">Nenhuma URL 200 encontrada</div>
+                                    <div className="empty-text">No HTTP 200 URL found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -5400,7 +5418,7 @@
                                             <th><i className="fas fa-hashtag"></i> #</th>
                                             <th><i className="fas fa-link"></i> URL</th>
                                             <th><i className="fas fa-signal"></i> Status</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5417,7 +5435,7 @@
                                                 </td>
                                                 <td>
                                                     <button className="btn-copy" onClick={() => navigator.clipboard.writeText(urlObj.url)}>
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -5468,12 +5486,12 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-ban"></i> HTTP 403 - URLs Bloqueadas</h2>
+                            <h2><i className="fas fa-ban"></i> HTTP 403 - Blocked URLs</h2>
                             <span className="header-badge">{filteredUrls.length} URLs</span>
                         </div>
                         <div className="header-actions">
                             <button className="btn-action" onClick={fetchUrls}>
-                                <i className="fas fa-sync-alt"></i> Atualizar
+                                <i className="fas fa-sync-alt"></i> Refresh
                             </button>
                             <button className="btn-action">
                                 <i className="fas fa-unlock"></i> Tentar Bypass
@@ -5485,12 +5503,12 @@
                         <input
                             type="text"
                             className="search-input"
-                            placeholder="🔍 Buscar URL..."
+                            placeholder="🔍 Search URL..."
                             value={searchTerm}
                             onChange={(e) => setSearchTerm(e.target.value)}
                         />
                         <button className="btn-filter">
-                            <i className="fas fa-search"></i> Buscar
+                            <i className="fas fa-search"></i> Search
                         </button>
                     </div>
 
@@ -5505,12 +5523,12 @@
                             {loading ? (
                                 <div className="loading-container">
                                     <div className="loading-spinner"></div>
-                                    <div className="loading-text">Carregando URLs...</div>
+                                    <div className="loading-text">Loading URLs...</div>
                                 </div>
                             ) : filteredUrls.length === 0 ? (
                                 <div className="empty-state">
                                     <div className="empty-icon"><i className="fas fa-lock"></i></div>
-                                    <div className="empty-text">Nenhuma URL 403 encontrada</div>
+                                    <div className="empty-text">No HTTP 403 URL found</div>
                                 </div>
                             ) : (
                                 <table>
@@ -5519,7 +5537,7 @@
                                             <th><i className="fas fa-hashtag"></i> #</th>
                                             <th><i className="fas fa-link"></i> URL</th>
                                             <th><i className="fas fa-signal"></i> Status</th>
-                                            <th><i className="fas fa-tools"></i> Ações</th>
+                                            <th><i className="fas fa-tools"></i> Actions</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5536,7 +5554,7 @@
                                                 </td>
                                                 <td>
                                                     <button className="btn-copy" onClick={() => navigator.clipboard.writeText(urlObj.url)}>
-                                                        <i className="fas fa-copy"></i> Copiar
+                                                        <i className="fas fa-copy"></i> Copy
                                                     </button>
                                                 </td>
                                             </tr>
@@ -5575,7 +5593,7 @@
                     if (response.ok) {
                         const data = await response.json();
                         if (data.token && data.token.length > 0) {
-                            // Mostrar apenas os últimos 8 caracteres do token
+                            // Show only last 8 characters of token
                             const maskedToken = data.token.substring(0, 4) + '...' + data.token.substring(data.token.length - 4);
                             setGithubToken(data.token);
                             setTokenSaved(true);
@@ -5607,11 +5625,11 @@
                     } else {
                         const errorText = await response.text();
                         console.error('Error response:', errorText);
-                        alert('❌ Erro ao salvar token do GitHub: ' + errorText);
+                        alert('❌ Error saving GitHub token:' + errorText);
                     }
                 } catch (err) {
                     console.error('Error saving GitHub token:', err);
-                    alert('❌ Erro ao salvar token: ' + err.message);
+                    alert('❌ Error saving token:' + err.message);
                 } finally {
                     setLoading(false);
                 }
@@ -5619,7 +5637,7 @@
 
             const listRepos = async () => {
                 if (!orgName) {
-                    alert('Por favor, insira o nome da organização');
+                    alert('Please enter the organization name');
                     return;
                 }
 
@@ -5632,15 +5650,15 @@
                     if (response.ok) {
                         const data = await response.json();
                         setRepos(data);
-                        alert(`✅ Encontrados ${data.length} repositórios!`);
+                        alert(`✅ Found ${data.length} repositories!`);
                     } else {
                         const errorText = await response.text();
                         console.error('Error response:', errorText);
-                        alert('❌ Erro ao listar repositórios. Verifique o token e a organização.');
+                        alert('❌ Error listing repositories. Check the token and organization.');
                     }
                 } catch (err) {
                     console.error('Error:', err);
-                    alert('❌ Erro ao buscar repositórios: ' + err.message);
+                    alert('❌ Error fetching repositories:' + err.message);
                 } finally {
                     setLoading(false);
                 }
@@ -5648,7 +5666,7 @@
 
             const runTruffleHogScan = async () => {
                 if (!orgName) {
-                    alert('Por favor, insira o nome da organização');
+                    alert('Please enter the organization name');
                     return;
                 }
 
@@ -5675,12 +5693,12 @@
                         // Poll for results
                         setTimeout(() => fetchScanResults(), 3000);
                     } else {
-                        alert('Erro ao iniciar scan do TruffleHog');
+                        alert('Error starting TruffleHog scan');
                         setScanning(false);
                     }
                 } catch (err) {
                     console.error('Error:', err);
-                    alert('Erro ao executar scan');
+                    alert('Error executing scan');
                     setScanning(false);
                 } finally {
                 setLoading(false);
@@ -5717,7 +5735,7 @@
                             <h2><i className="fas fa-brands fa-github"></i> GitHub Secret Scanner (TruffleHog)</h2>
                             {alertCount > 0 && (
                                 <span className="header-badge" style={{backgroundColor: '#ef4444'}}>
-                                    {alertCount} Secrets Encontrados! 🚨
+                                    {alertCount} Secrets Found! 🚨
                                 </span>
                             )}
                         </div>
@@ -5726,7 +5744,7 @@
                     <div className="data-card" style={{marginBottom: '20px'}}>
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-key"></i> Configuração do GitHub Token
+                                <i className="fas fa-key"></i> GitHub Token Configuration
                             </div>
                         </div>
                         <div style={{padding: '20px'}}>
@@ -5743,7 +5761,7 @@
                                     style={{width: '100%', marginBottom: '10px'}}
                                 />
                                 <button className="btn-action" onClick={saveGitHubToken}>
-                                    <i className="fas fa-save"></i> Salvar Token
+                                    <i className="fas fa-save"></i> Save Token
                                 </button>
                                 {tokenSaved && <span style={{marginLeft: '10px', color: '#22c55e'}}>✓ Token salvo!</span>}
                             </div>
@@ -5753,13 +5771,13 @@
                     <div className="data-card" style={{marginBottom: '20px'}}>
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-search"></i> Buscar Secrets em Organização
+                                <i className="fas fa-search"></i> Search Secrets in Organization
                             </div>
                         </div>
                         <div style={{padding: '20px'}}>
                             <div style={{marginBottom: '15px'}}>
                                 <label style={{display: 'block', marginBottom: '8px', fontWeight: 'bold'}}>
-                                    Nome da Organização:
+                                    Organization Name:
                                 </label>
                                 <input
                                     type="text"
@@ -5771,7 +5789,7 @@
                                 />
                                 <div style={{display: 'flex', gap: '10px'}}>
                                     <button className="btn-action" onClick={listRepos} disabled={loading}>
-                                        <i className="fas fa-list"></i> {loading ? 'Carregando...' : 'Listar Repositórios'}
+                                        <i className="fas fa-list"></i> {loading ? 'Loading...' : 'List Repositories'}
                                     </button>
                                     <button
                                         className="btn-action"
@@ -5779,13 +5797,13 @@
                                         disabled={scanning}
                                         style={{backgroundColor: scanning ? '#666' : '#f97316'}}
                                     >
-                                        <i className="fas fa-shield-virus"></i> {scanning ? 'Escaneando...' : 'Escanear com TruffleHog'}
+                                        <i className="fas fa-shield-virus"></i> {scanning ? 'Scanning...' : 'Scan with TruffleHog'}
                                     </button>
                                 </div>
                             </div>
                             {repos.length > 0 && (
                                 <div style={{marginTop: '15px'}}>
-                                    <p><strong>Repositórios encontrados:</strong> {repos.length}</p>
+                                    <p><strong>Repositories found:</strong> {repos.length}</p>
                                     <ul style={{maxHeight: '300px', overflow: 'auto', paddingLeft: '20px', listStyle: 'none'}}>
                                         {repos.map((repo, idx) => (
                                             <li key={idx} style={{marginBottom: '10px', padding: '8px', backgroundColor: '#1e293b', borderRadius: '4px'}}>
@@ -5803,7 +5821,7 @@
                                                     </div>
                                                 )}
                                                 <div style={{fontSize: '11px', color: '#64748b', marginTop: '4px'}}>
-                                                    {repo.full_name} • Atualizado: {new Date(repo.updated_at).toLocaleDateString('pt-BR')}
+                                                    {repo.full_name} • Atualizado: {new Date(repo.updated_at).toLocaleDateString('en-US')}
                                                 </div>
                                             </li>
                                         ))}
@@ -5817,7 +5835,7 @@
                         <div className="data-card">
                             <div className="data-card-header">
                                 <div className="data-card-title">
-                                    <i className="fas fa-exclamation-triangle"></i> Secrets Detectados
+                                    <i className="fas fa-exclamation-triangle"></i> Secrets Detected
                                     <span className="data-card-count" style={{backgroundColor: '#ef4444'}}>
                                         {scanResults.length}
                                     </span>
@@ -5828,10 +5846,10 @@
                                     <thead>
                                         <tr>
                                             <th><i className="fas fa-hashtag"></i> #</th>
-                                            <th><i className="fas fa-book"></i> Repositório</th>
+                                            <th><i className="fas fa-book"></i> Repository</th>
                                             <th><i className="fas fa-file"></i> Arquivo</th>
                                             <th><i className="fas fa-key"></i> Tipo de Secret</th>
-                                            <th><i className="fas fa-exclamation"></i> Detalhes</th>
+                                            <th><i className="fas fa-exclamation"></i> Details</th>
                                         </tr>
                                     </thead>
                                     <tbody>
@@ -5845,7 +5863,7 @@
                                                         {result.type || 'Secret'}
                                                     </span>
                                                 </td>
-                                                <td><span style={{fontSize: '12px'}}>{result.details || 'Verificar repositório'}</span></td>
+                                                <td><span style={{fontSize: '12px'}}>{result.details || 'Check repository'}</span></td>
                                             </tr>
                                         ))}
                                     </tbody>
@@ -5857,10 +5875,257 @@
                     {scanning && (
                         <div style={{textAlign: 'center', padding: '40px'}}>
                             <div className="loading-spinner"></div>
-                            <div className="loading-text">Escaneando repositórios com TruffleHog...</div>
+                            <div className="loading-text">Scanning repositories with TruffleHog...</div>
                             <p style={{marginTop: '10px', color: '#888'}}>
-                                Este processo pode levar alguns minutos dependendo do tamanho da organização.
+                                This process may take a few minutes depending on the organization size.
                             </p>
+                        </div>
+                    )}
+                </>
+            );
+        }
+
+        // Files Tab Component
+        function FilesTab({ token, domain }) {
+            const [files, setFiles] = useState([]);
+            const [loading, setLoading] = useState(true);
+            const [currentPath, setCurrentPath] = useState('');
+            const [fileContent, setFileContent] = useState(null);
+            const [viewingFile, setViewingFile] = useState(null);
+
+            useEffect(() => {
+                if (domain) {
+                    fetchFiles();
+                }
+            }, [domain, currentPath]);
+
+            const fetchFiles = async () => {
+                setLoading(true);
+                try {
+                    let url = `${API_URL}/api/domain/${domain}/files`;
+                    if (currentPath) {
+                        url += `?path=${encodeURIComponent(currentPath)}`;
+                    }
+                    const response = await fetch(url, {
+                        headers: { 'Authorization': `Bearer ${token}` }
+                    });
+                    if (response.ok) {
+                        const data = await response.json();
+                        setFiles(data);
+                    }
+                } catch (err) {
+                    console.error('[Files] Error fetching files:', err);
+                } finally {
+                    setLoading(false);
+                }
+            };
+
+            const handleItemClick = async (file) => {
+                if (file.is_dir) {
+                    // Navigate into directory
+                    const newPath = currentPath ? `${currentPath}/${file.name}` : file.name;
+                    setCurrentPath(newPath);
+                    setViewingFile(null);
+                    setFileContent(null);
+                } else {
+                    // View file content
+                    try {
+                        const response = await fetch(`${API_URL}/api/file/${file.path}`, {
+                            headers: { 'Authorization': `Bearer ${token}` }
+                        });
+                        if (response.ok) {
+                            const data = await response.json();
+                            setFileContent(data.content);
+                            setViewingFile(file.name);
+                        }
+                    } catch (err) {
+                        console.error('[Files] Error reading file:', err);
+                    }
+                }
+            };
+
+            const navigateTo = (pathIndex) => {
+                if (pathIndex < 0) {
+                    setCurrentPath('');
+                } else {
+                    const parts = currentPath.split('/');
+                    setCurrentPath(parts.slice(0, pathIndex + 1).join('/'));
+                }
+                setViewingFile(null);
+                setFileContent(null);
+            };
+
+            const formatSize = (bytes) => {
+                if (bytes === 0) return '0 B';
+                const units = ['B', 'KB', 'MB', 'GB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(1024));
+                return (bytes / Math.pow(1024, i)).toFixed(i > 0 ? 1 : 0) + ' ' + units[i];
+            };
+
+            const pathParts = currentPath ? currentPath.split('/') : [];
+
+            return (
+                <>
+                    <div className="content-header">
+                        <div className="header-title">
+                            <h2><i className="fas fa-folder-open"></i> Arquivos</h2>
+                            <span className="header-badge">{domain || 'No domain selected'}</span>
+                        </div>
+                        <div className="header-actions">
+                            <button className="btn-refresh" onClick={fetchFiles}>
+                                <i className="fas fa-sync-alt"></i> Refresh
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* Breadcrumb Navigation */}
+                    <div style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: '5px',
+                        padding: '12px 16px',
+                        background: 'var(--dark-bg)',
+                        borderRadius: '8px',
+                        marginBottom: '20px',
+                        fontSize: '13px',
+                        flexWrap: 'wrap'
+                    }}>
+                        <span
+                            onClick={() => navigateTo(-1)}
+                            style={{
+                                cursor: 'pointer',
+                                color: currentPath ? 'var(--primary-blue)' : 'var(--text-white)',
+                                fontWeight: '600'
+                            }}
+                        >
+                            <i className="fas fa-home"></i> {domain}
+                        </span>
+                        {pathParts.map((part, idx) => (
+                            <React.Fragment key={idx}>
+                                <span style={{ color: 'var(--text-gray)' }}>/</span>
+                                <span
+                                    onClick={() => navigateTo(idx)}
+                                    style={{
+                                        cursor: 'pointer',
+                                        color: idx === pathParts.length - 1 && !viewingFile ? 'var(--text-white)' : 'var(--primary-blue)',
+                                        fontWeight: idx === pathParts.length - 1 && !viewingFile ? '600' : '400'
+                                    }}
+                                >
+                                    {part}
+                                </span>
+                            </React.Fragment>
+                        ))}
+                        {viewingFile && (
+                            <>
+                                <span style={{ color: 'var(--text-gray)' }}>/</span>
+                                <span style={{ color: 'var(--text-white)', fontWeight: '600' }}>{viewingFile}</span>
+                            </>
+                        )}
+                    </div>
+
+                    {viewingFile ? (
+                        /* File Viewer */
+                        <div className="data-card">
+                            <div style={{
+                                display: 'flex',
+                                justifyContent: 'space-between',
+                                alignItems: 'center',
+                                marginBottom: '15px',
+                                paddingBottom: '10px',
+                                borderBottom: '1px solid var(--border-color)'
+                            }}>
+                                <h3 style={{ margin: 0, fontSize: '14px' }}>
+                                    <i className="fas fa-file-alt"></i> {viewingFile}
+                                </h3>
+                                <button
+                                    onClick={() => { setViewingFile(null); setFileContent(null); }}
+                                    className="btn-refresh"
+                                    style={{ padding: '6px 14px', fontSize: '12px' }}
+                                >
+                                    <i className="fas fa-arrow-left"></i> Back
+                                </button>
+                            </div>
+                            <pre style={{
+                                background: '#0d1117',
+                                padding: '16px',
+                                borderRadius: '8px',
+                                overflow: 'auto',
+                                maxHeight: '70vh',
+                                fontSize: '12px',
+                                lineHeight: '1.5',
+                                fontFamily: 'monospace',
+                                color: '#c9d1d9',
+                                whiteSpace: 'pre-wrap',
+                                wordBreak: 'break-all',
+                                margin: 0
+                            }}>
+                                {fileContent || '(empty file)'}
+                            </pre>
+                        </div>
+                    ) : loading ? (
+                        <div className="loading-state">
+                            <div className="loading-spinner"></div>
+                            <div className="loading-text">Loading files...</div>
+                        </div>
+                    ) : (
+                        /* File listing table */
+                        <div className="data-table-container">
+                            <table className="data-table">
+                                <thead>
+                                    <tr>
+                                        <th style={{ width: '30px' }}></th>
+                                        <th>Name</th>
+                                        <th style={{ width: '100px' }}>Size</th>
+                                        <th style={{ width: '100px' }}>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    {files.length > 0 ? (
+                                        files.map((file, idx) => (
+                                            <tr key={idx} style={{ cursor: 'pointer' }} onClick={() => handleItemClick(file)}>
+                                                <td>
+                                                    <i className={file.is_dir ? 'fas fa-folder' : 'fas fa-file-alt'}
+                                                       style={{ color: file.is_dir ? '#f0c040' : 'var(--text-gray)' }}></i>
+                                                </td>
+                                                <td style={{
+                                                    color: file.is_dir ? 'var(--primary-blue)' : 'var(--text-white)',
+                                                    fontWeight: file.is_dir ? '600' : '400'
+                                                }}>
+                                                    {file.name}
+                                                </td>
+                                                <td style={{ fontSize: '12px', color: 'var(--text-gray)' }}>
+                                                    {file.is_dir ? '-' : formatSize(file.size)}
+                                                </td>
+                                                <td>
+                                                    <button
+                                                        onClick={(e) => { e.stopPropagation(); handleItemClick(file); }}
+                                                        style={{
+                                                            background: file.is_dir ? 'var(--primary-blue)' : 'var(--primary-green)',
+                                                            border: 'none',
+                                                            color: 'white',
+                                                            padding: '4px 12px',
+                                                            borderRadius: '4px',
+                                                            cursor: 'pointer',
+                                                            fontSize: '11px'
+                                                        }}
+                                                    >
+                                                        {file.is_dir ? 'Open' : 'View'}
+                                                    </button>
+                                                </td>
+                                            </tr>
+                                        ))
+                                    ) : (
+                                        <tr>
+                                            <td colSpan="4" style={{ textAlign: 'center', padding: '40px' }}>
+                                                <div className="empty-state">
+                                                    <i className="fas fa-folder-open" style={{ fontSize: '48px', opacity: '0.3' }}></i>
+                                                    <div>No file found</div>
+                                                </div>
+                                            </td>
+                                        </tr>
+                                    )}
+                                </tbody>
+                            </table>
                         </div>
                     )}
                 </>
@@ -5912,14 +6177,14 @@
                     if (response.ok) {
                         setWebhookSaved(true);
                         setCurrentWebhook(webhookUrl);
-                        alert('Webhook do Discord salvo com sucesso!');
+                        alert('Discord Webhook saved successfully!');
                         setTimeout(() => setWebhookSaved(false), 3000);
                     } else {
-                        alert('Erro ao salvar webhook');
+                        alert('Error saving webhook');
                     }
                 } catch (err) {
                     console.error('Error:', err);
-                    alert('Erro ao salvar webhook');
+                    alert('Error saving webhook');
                 } finally {
                 setLoading(false);
             }
@@ -5927,7 +6192,7 @@
 
             const testWebhook = async () => {
                 if (!webhookUrl) {
-                    alert('Por favor, configure o webhook primeiro');
+                    alert('Please configure the webhook first');
                     return;
                 }
 
@@ -5942,12 +6207,12 @@
                         body: JSON.stringify({
                             embeds: [{
                                 title: '🧪 Teste de Webhook - EnumRust',
-                                description: 'Este é um teste do sistema de notificações do EnumRust.',
+                                description: 'This is a test of the EnumRust notification system.',
                                 color: 3447003,
                                 fields: [
                                     {
                                         name: 'Status',
-                                        value: '✅ Webhook configurado corretamente!',
+                                        value: '✅ Webhook configured correctly!',
                                         inline: false
                                     },
                                     {
@@ -5967,11 +6232,11 @@
                     if (response.ok) {
                         alert('✅ Webhook testado com sucesso! Verifique seu canal do Discord.');
                     } else {
-                        alert('❌ Erro ao testar webhook. Verifique a URL.');
+                        alert('❌ Error testing webhook. Check the URL.');
                     }
                 } catch (err) {
                     console.error('Error:', err);
-                    alert('❌ Erro ao testar webhook: ' + err.message);
+                    alert('❌ Error testing webhook:' + err.message);
                 } finally {
                     setTestingWebhook(false);
                 }
@@ -5981,36 +6246,36 @@
                 <>
                     <div className="content-header">
                         <div className="header-title">
-                            <h2><i className="fas fa-cog"></i> Configurações do Sistema</h2>
+                            <h2><i className="fas fa-cog"></i> System Settings</h2>
                         </div>
                     </div>
 
                     <div className="data-card" style={{marginBottom: '20px'}}>
                         <div className="data-card-header">
                             <div className="data-card-title">
-                                <i className="fas fa-brands fa-discord"></i> Webhook do Discord
+                                <i className="fas fa-brands fa-discord"></i> Discord Webhook
                             </div>
                         </div>
                         <div style={{padding: '20px'}}>
                             <div style={{marginBottom: '20px', padding: '15px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.3)'}}>
                                 <p style={{margin: '0 0 10px 0', fontWeight: 'bold', color: '#3b82f6'}}>
-                                    <i className="fas fa-info-circle"></i> Sobre as Notificações
+                                    <i className="fas fa-info-circle"></i> About Notifications
                                 </p>
                                 <p style={{margin: '0', fontSize: '14px', lineHeight: '1.6'}}>
-                                    Configure um webhook do Discord para receber alertas automáticos quando:
+                                    Configure a Discord webhook to receive automatic alerts when:
                                 </p>
                                 <ul style={{marginTop: '10px', paddingLeft: '20px', fontSize: '14px'}}>
-                                    <li>Vulnerabilidades forem encontradas pelo Nuclei</li>
-                                    <li>Secrets forem detectados em código</li>
-                                    <li>Novos subdomínios forem descobertos</li>
-                                    <li>Falhas críticas forem identificadas</li>
+                                    <li>Vulnerabilities forem found pelo Nuclei</li>
+                                    <li>Secrets are detected in code</li>
+                                    <li>New subdomains are discovered</li>
+                                    <li>Critical failures are identified</li>
                                 </ul>
                             </div>
 
                             {currentWebhook && (
                                 <div style={{marginBottom: '15px', padding: '10px', backgroundColor: 'rgba(34, 197, 94, 0.1)', borderRadius: '8px'}}>
                                     <p style={{margin: '0', color: '#22c55e', fontSize: '14px'}}>
-                                        <i className="fas fa-check-circle"></i> Webhook configurado e ativo
+                                        <i className="fas fa-check-circle"></i> Webhook configured and active
                                     </p>
                                 </div>
                             )}
@@ -6029,7 +6294,7 @@
                                 />
                                 <div style={{display: 'flex', gap: '10px'}}>
                                     <button className="btn-action" onClick={saveWebhook}>
-                                        <i className="fas fa-save"></i> Salvar Webhook
+                                        <i className="fas fa-save"></i> Save Webhook
                                     </button>
                                     <button
                                         className="btn-action"
@@ -6037,7 +6302,7 @@
                                         disabled={testingWebhook || !webhookUrl}
                                         style={{backgroundColor: '#5865f2'}}
                                     >
-                                        <i className="fas fa-paper-plane"></i> {testingWebhook ? 'Enviando...' : 'Testar Webhook'}
+                                        <i className="fas fa-paper-plane"></i> {testingWebhook ? 'Sending...' : 'Test Webhook'}
                                     </button>
                                 </div>
                                 {webhookSaved && (
@@ -6049,15 +6314,15 @@
 
                             <div style={{marginTop: '20px', padding: '15px', backgroundColor: 'rgba(234, 179, 8, 0.1)', borderRadius: '8px', border: '1px solid rgba(234, 179, 8, 0.3)'}}>
                                 <p style={{margin: '0 0 10px 0', fontWeight: 'bold', color: '#eab308'}}>
-                                    <i className="fas fa-lightbulb"></i> Como obter a URL do Webhook:
+                                    <i className="fas fa-lightbulb"></i> How to get the Webhook URL:
                                 </p>
                                 <ol style={{margin: '0', paddingLeft: '20px', fontSize: '14px', lineHeight: '1.8'}}>
-                                    <li>Acesse as configurações do seu servidor Discord</li>
-                                    <li>Vá em "Integrações" → "Webhooks"</li>
-                                    <li>Clique em "Novo Webhook"</li>
-                                    <li>Configure o nome e canal</li>
-                                    <li>Copie a URL do webhook</li>
-                                    <li>Cole aqui e clique em "Salvar Webhook"</li>
+                                    <li>Access your Discord server settings</li>
+                                    <li>Go to "Integrations" then "Webhooks"</li>
+                                    <li>Click on "New Webhook"</li>
+                                    <li>Configure the name and channel</li>
+                                    <li>Copy the webhook URL</li>
+                                    <li>Paste here and click "Save Webhook"</li>
                                 </ol>
                             </div>
                         </div>
@@ -6073,27 +6338,27 @@
                             <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(250px, 1fr))', gap: '15px'}}>
                                 <div style={{padding: '15px', backgroundColor: 'rgba(239, 68, 68, 0.1)', borderRadius: '8px', border: '1px solid rgba(239, 68, 68, 0.3)'}}>
                                     <h4 style={{margin: '0 0 8px 0', color: '#ef4444'}}>
-                                        <i className="fas fa-bug"></i> Vulnerabilidades Críticas
+                                        <i className="fas fa-bug"></i> Critical Vulnerabilities
                                     </h4>
-                                    <p style={{margin: '0', fontSize: '13px'}}>Alertas para vulnerabilidades críticas e altas detectadas pelo Nuclei</p>
+                                    <p style={{margin: '0', fontSize: '13px'}}>Alerts for critical and high vulnerabilities detected by Nuclei</p>
                                 </div>
                                 <div style={{padding: '15px', backgroundColor: 'rgba(249, 115, 22, 0.1)', borderRadius: '8px', border: '1px solid rgba(249, 115, 22, 0.3)'}}>
                                     <h4 style={{margin: '0 0 8px 0', color: '#f97316'}}>
-                                        <i className="fas fa-key"></i> Secrets Detectados
+                                        <i className="fas fa-key"></i> Secrets Detected
                                     </h4>
-                                    <p style={{margin: '0', fontSize: '13px'}}>Notificações quando tokens ou senhas forem encontrados</p>
+                                    <p style={{margin: '0', fontSize: '13px'}}>Notifications when tokens or passwords are found</p>
                                 </div>
                                 <div style={{padding: '15px', backgroundColor: 'rgba(59, 130, 246, 0.1)', borderRadius: '8px', border: '1px solid rgba(59, 130, 246, 0.3)'}}>
                                     <h4 style={{margin: '0 0 8px 0', color: '#3b82f6'}}>
-                                        <i className="fas fa-sitemap"></i> Novos Subdomínios
+                                        <i className="fas fa-sitemap"></i> New Subdomains
                                     </h4>
-                                    <p style={{margin: '0', fontSize: '13px'}}>Alertas quando novos subdomínios forem descobertos</p>
+                                    <p style={{margin: '0', fontSize: '13px'}}>Alerts when new subdomains are discovered</p>
                                 </div>
                                 <div style={{padding: '15px', backgroundColor: 'rgba(168, 85, 247, 0.1)', borderRadius: '8px', border: '1px solid rgba(168, 85, 247, 0.3)'}}>
                                     <h4 style={{margin: '0 0 8px 0', color: '#a855f7'}}>
-                                        <i className="fas fa-shield-alt"></i> Atualizações de Status
+                                        <i className="fas fa-shield-alt"></i> Status Updates
                                     </h4>
-                                    <p style={{margin: '0', fontSize: '13px'}}>Notificações sobre progresso e conclusão de scans</p>
+                                    <p style={{margin: '0', fontSize: '13px'}}>Notifications about scan progress and completion</p>
                                 </div>
                             </div>
                         </div>

@@ -360,6 +360,11 @@ struct Args {
     #[arg(long, help_heading = "Tool Management",
           help = "Check which required tools are installed and their versions")]
     check_tools: bool,
+
+    /// Force re-validation of tools (clear cache)
+    #[arg(long, help_heading = "Tool Management",
+          help = "Force re-discovery and re-validation of all tools (clears cache)")]
+    revalidate_tools: bool,
 }
 
 /// Main entry point
@@ -380,6 +385,7 @@ async fn main() -> Result<()> {
     }
 
     if args.install_tools {
+        invalidate_tools_cache();
         install_all_tools().await?;
         return Ok(());
     }
@@ -410,6 +416,13 @@ async fn main() -> Result<()> {
             eprintln!();
             std::process::exit(1);
         }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // TOOL VALIDATION: Auto-discover tools and validate before scan
+    // ═══════════════════════════════════════════════════════════════════════════
+    if args.domain.is_some() || args.file.is_some() {
+        validate_tools_before_scan(&args).await?;
     }
 
     // Mode selection: dashboard, file, or single domain scan
@@ -2501,20 +2514,353 @@ fn get_tools_list() -> Vec<ToolInfo> {
     ]
 }
 
-/// Check if a tool is installed and get its version
-async fn check_tool_installed(binary: &str) -> (bool, Option<String>) {
-    // First check if the tool exists
-    let which_result = std::process::Command::new("which")
-        .arg(binary)
-        .output();
+/// Common paths where security tools may be installed
+fn get_common_tool_paths() -> Vec<PathBuf> {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    let gopath = std::env::var("GOPATH").unwrap_or_else(|_| format!("{}/go", home));
 
-    if which_result.is_err() || !which_result.unwrap().status.success() {
+    vec![
+        // Go binaries (most common for security tools)
+        PathBuf::from(format!("{}/bin", gopath)),
+        PathBuf::from(format!("{}/go/bin", home)),
+        PathBuf::from("/usr/local/go/bin"),
+        // Cargo binaries (feroxbuster, etc.)
+        PathBuf::from(format!("{}/.cargo/bin", home)),
+        // System paths
+        PathBuf::from("/usr/local/bin"),
+        PathBuf::from("/usr/bin"),
+        PathBuf::from("/usr/sbin"),
+        PathBuf::from("/bin"),
+        PathBuf::from("/sbin"),
+        // Snap packages
+        PathBuf::from("/snap/bin"),
+        // Homebrew (Linux)
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin"),
+        PathBuf::from(format!("{}/.linuxbrew/bin", home)),
+        // Pipx / pip user installs
+        PathBuf::from(format!("{}/.local/bin", home)),
+        // nix
+        PathBuf::from(format!("{}/.nix-profile/bin", home)),
+        // Common pentest tool locations
+        PathBuf::from("/opt/tools"),
+        PathBuf::from("/opt/bin"),
+    ]
+}
+
+/// Search for a binary in common paths and return full path if found
+fn discover_tool_path(binary: &str) -> Option<PathBuf> {
+    // First try the current PATH via `which`
+    if let Ok(output) = std::process::Command::new("which")
+        .arg(binary)
+        .output()
+    {
+        if output.status.success() {
+            let path_str = String::from_utf8_lossy(&output.stdout).trim().to_string();
+            if !path_str.is_empty() {
+                return Some(PathBuf::from(path_str));
+            }
+        }
+    }
+
+    // Search common paths
+    for dir in get_common_tool_paths() {
+        let candidate = dir.join(binary);
+        if candidate.exists() && candidate.is_file() {
+            // Verify it's executable
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if let Ok(metadata) = std::fs::metadata(&candidate) {
+                    if metadata.permissions().mode() & 0o111 != 0 {
+                        return Some(candidate);
+                    }
+                }
+            }
+            #[cfg(not(unix))]
+            {
+                return Some(candidate);
+            }
+        }
+    }
+
+    None
+}
+
+/// Auto-discover all tools and add their directories to PATH
+/// Returns a map of tool binary -> full path for discovered tools
+fn auto_discover_and_configure_path() -> std::collections::HashMap<String, PathBuf> {
+    let tools = get_tools_list();
+    let mut discovered: std::collections::HashMap<String, PathBuf> = std::collections::HashMap::new();
+    let mut new_path_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let current_path = std::env::var("PATH").unwrap_or_default();
+
+    for tool in &tools {
+        if let Some(full_path) = discover_tool_path(tool.binary) {
+            // Add the parent directory to PATH if not already there
+            if let Some(parent) = full_path.parent() {
+                let parent_str = parent.to_string_lossy().to_string();
+                if !current_path.contains(&parent_str) {
+                    new_path_dirs.insert(parent_str);
+                }
+            }
+            discovered.insert(tool.binary.to_string(), full_path);
+        }
+    }
+
+    // Also check for Go binary itself
+    if let Some(go_path) = discover_tool_path("go") {
+        if let Some(parent) = go_path.parent() {
+            let parent_str = parent.to_string_lossy().to_string();
+            if !current_path.contains(&parent_str) {
+                new_path_dirs.insert(parent_str);
+            }
+        }
+    }
+
+    // Update PATH with all discovered directories
+    if !new_path_dirs.is_empty() {
+        let additions: Vec<&str> = new_path_dirs.iter().map(|s| s.as_str()).collect();
+        let new_path = format!("{}:{}", additions.join(":"), current_path);
+        std::env::set_var("PATH", &new_path);
+    }
+
+    discovered
+}
+
+/// Get path to the tools cache file
+fn get_tools_cache_path() -> PathBuf {
+    let home = std::env::var("HOME").unwrap_or_else(|_| "/root".to_string());
+    PathBuf::from(home).join(".enumrust_tools_cache.json")
+}
+
+/// Save discovered tool paths to cache file
+fn save_tools_cache(discovered: &std::collections::HashMap<String, PathBuf>) {
+    let cache_path = get_tools_cache_path();
+    let cache_data: std::collections::HashMap<String, String> = discovered
+        .iter()
+        .map(|(k, v)| (k.clone(), v.to_string_lossy().to_string()))
+        .collect();
+
+    if let Ok(json) = serde_json::to_string_pretty(&cache_data) {
+        let _ = fs::write(&cache_path, json);
+    }
+}
+
+/// Load tool paths from cache and configure PATH
+/// Returns true if cache was valid and loaded successfully
+fn load_tools_cache_and_configure() -> bool {
+    let cache_path = get_tools_cache_path();
+
+    // Check if cache exists
+    let content = match fs::read_to_string(&cache_path) {
+        Ok(c) => c,
+        Err(_) => return false,
+    };
+
+    // Parse cache
+    let cache_data: std::collections::HashMap<String, String> = match serde_json::from_str(&content) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    if cache_data.is_empty() {
+        return false;
+    }
+
+    // Verify that cached paths still exist (quick check on core tools only)
+    let core_binaries = ["httpx", "dnsx", "nuclei"];
+    for binary in &core_binaries {
+        if let Some(path_str) = cache_data.get(*binary) {
+            let path = PathBuf::from(path_str);
+            if !path.exists() {
+                // Cache is stale - a core tool was removed/moved
+                let _ = fs::remove_file(&cache_path);
+                return false;
+            }
+        }
+    }
+
+    // Cache is valid - add all directories to PATH
+    let current_path = std::env::var("PATH").unwrap_or_default();
+    let mut new_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for path_str in cache_data.values() {
+        let path = PathBuf::from(path_str);
+        if let Some(parent) = path.parent() {
+            let parent_str = parent.to_string_lossy().to_string();
+            if !current_path.contains(&parent_str) {
+                new_dirs.insert(parent_str);
+            }
+        }
+    }
+
+    if !new_dirs.is_empty() {
+        let additions: Vec<&str> = new_dirs.iter().map(|s| s.as_str()).collect();
+        let new_path = format!("{}:{}", additions.join(":"), current_path);
+        std::env::set_var("PATH", &new_path);
+    }
+
+    true
+}
+
+/// Invalidate (delete) the tools cache
+fn invalidate_tools_cache() {
+    let cache_path = get_tools_cache_path();
+    let _ = fs::remove_file(&cache_path);
+}
+
+/// Validate that required tools are available before starting a scan
+/// Uses cache to skip full discovery on subsequent runs
+async fn validate_tools_before_scan(args: &Args) -> Result<()> {
+    // Try loading from cache first (unless --revalidate-tools was passed)
+    if !args.revalidate_tools && load_tools_cache_and_configure() {
+        println!("{}", "[+] Tools validated (cached) - PATH configured.".green());
+        println!();
+        return Ok(());
+    }
+
+    // Full discovery needed
+    println!("{}", "── TOOL VALIDATION ──".cyan().bold());
+    println!("{}", "[*] Auto-discovering tools in system paths...".cyan());
+
+    let discovered = auto_discover_and_configure_path();
+    let tools = get_tools_list();
+
+    let mut core_missing: Vec<&ToolInfo> = Vec::new();
+    let mut optional_missing: Vec<&ToolInfo> = Vec::new();
+
+    for tool in &tools {
+        if discovered.get(tool.binary).is_none() {
+            let is_needed = is_tool_needed_for_scan(tool.binary, args);
+            if tool.is_core && is_needed {
+                core_missing.push(tool);
+            } else if is_needed {
+                optional_missing.push(tool);
+            }
+        }
+    }
+
+    // Report discovered tools
+    let found_count = discovered.len();
+    let total_tools = tools.len();
+    println!("{}", format!("[+] Found {}/{} tools in system", found_count, total_tools).green());
+
+    for tool in &tools {
+        if let Some(path) = discovered.get(tool.binary) {
+            println!("    {} {} → {}",
+                "✓".green(),
+                tool.name.green(),
+                path.display().to_string().dimmed()
+            );
+        }
+    }
+
+    // Show warnings for missing optional tools
+    if !optional_missing.is_empty() {
+        println!();
+        println!("{}", format!("[!] {} optional tool(s) not found (some features will be skipped):", optional_missing.len()).yellow());
+        for tool in &optional_missing {
+            println!("    {} {} - {}",
+                "⚠".yellow(),
+                tool.name.yellow(),
+                tool.description
+            );
+        }
+    }
+
+    // Block if core tools are missing
+    if !core_missing.is_empty() {
+        println!();
+        eprintln!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".red().bold());
+        eprintln!("{}", "║              ERRO: FERRAMENTAS CORE NÃO ENCONTRADAS!                         ║".red().bold());
+        eprintln!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".red().bold());
+        for tool in &core_missing {
+            eprintln!("{}",
+                format!("║  ✗ {} - {}",
+                    tool.name, tool.description
+                ).red()
+            );
+            eprintln!("{}",
+                format!("║    Instalar: {}",
+                    tool.install_cmd
+                ).yellow()
+            );
+        }
+        eprintln!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".red().bold());
+        eprintln!("{}", "║  Instale automaticamente com:  enumrust --install-tools                      ║".green());
+        eprintln!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".red().bold());
+        std::process::exit(1);
+    }
+
+    // Save cache for future runs
+    save_tools_cache(&discovered);
+    println!("{}", "[+] Tool validation complete - cached for next runs.".green().bold());
+    println!("{}", "    Use --revalidate-tools to force re-discovery.".dimmed());
+    println!();
+
+    Ok(())
+}
+
+/// Check if a specific tool is needed for the current scan configuration
+fn is_tool_needed_for_scan(binary: &str, args: &Args) -> bool {
+    match binary {
+        // Core tools always needed
+        "httpx" | "dnsx" | "nuclei" => true,
+        "masscan" => args.ip_scan || args.full_scan,
+        // Conditional tools
+        "subfinder" => args.subfinder || args.full_scan,
+        "haktrails" => args.hacktrails || args.full_scan,
+        "anew" => true, // Used in multiple pipeline stages
+        "jq" => true,   // Used with tlsx output
+        "tlsx" => true,  // Certificate SAN extraction
+        "whois" => true, // WHOIS lookup
+        "tmux" => false, // Nice to have but not required
+        "hakrawler" => true, // URL discovery
+        "ffuf" => true,  // Directory fuzzing (has feroxbuster fallback)
+        "feroxbuster" => true, // Fallback fuzzer
+        "trufflehog" => true, // Secret scanning
+        "urlfinder" => true,
+        "katana" => true,
+        "gau" => true,
+        "waybackurls" => true,
+        _ => false,
+    }
+}
+
+/// Check if a tool is installed and get its version (with auto-discovery)
+async fn check_tool_installed(binary: &str) -> (bool, Option<String>) {
+    // Use discovery to find tool in common paths
+    if discover_tool_path(binary).is_none() {
         return (false, None);
     }
 
     // Try to get version
     let version = get_tool_version(binary).await;
     (true, version)
+}
+
+/// Strip ANSI escape codes from a string
+fn strip_ansi_codes(s: &str) -> String {
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '\x1b' {
+            // Skip escape sequence: ESC [ ... final_byte
+            if chars.peek() == Some(&'[') {
+                chars.next(); // consume '['
+                // Consume until we hit a letter (the final byte of the sequence)
+                while let Some(&next) = chars.peek() {
+                    chars.next();
+                    if next.is_ascii_alphabetic() {
+                        break;
+                    }
+                }
+            }
+        } else {
+            result.push(c);
+        }
+    }
+    result
 }
 
 /// Get tool version by running it with --version or -version flag
@@ -2529,9 +2875,11 @@ async fn get_tool_version(binary: &str) -> Option<String> {
             let stdout = String::from_utf8_lossy(&output.stdout);
             let stderr = String::from_utf8_lossy(&output.stderr);
             let version_str = if !stdout.trim().is_empty() { stdout } else { stderr };
-            // Extract first line and clean it
             if let Some(line) = version_str.lines().next() {
-                return Some(line.trim().to_string());
+                let clean = strip_ansi_codes(line.trim());
+                if !clean.is_empty() {
+                    return Some(clean);
+                }
             }
         }
     }
@@ -2547,7 +2895,10 @@ async fn get_tool_version(binary: &str) -> Option<String> {
             let stderr = String::from_utf8_lossy(&output.stderr);
             let version_str = if !stdout.trim().is_empty() { stdout } else { stderr };
             if let Some(line) = version_str.lines().next() {
-                return Some(line.trim().to_string());
+                let clean = strip_ansi_codes(line.trim());
+                if !clean.is_empty() {
+                    return Some(clean);
+                }
             }
         }
     }
@@ -2555,31 +2906,31 @@ async fn get_tool_version(binary: &str) -> Option<String> {
     None
 }
 
-/// Check and display status of all tools
+/// Check and display status of all tools (with auto-discovery)
 async fn check_tools_status() {
     println!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".cyan().bold());
     println!("{}", "║                        ENUMRUST - TOOL STATUS CHECK                          ║".cyan().bold());
     println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
     println!();
 
+    // Auto-discover tools first
+    println!("{}", "[*] Auto-discovering tools in system paths...".cyan());
+    let discovered = auto_discover_and_configure_path();
+    println!("{}", format!("[+] Searched {} common directories", get_common_tool_paths().len()).dimmed());
+    println!();
+
     let tools = get_tools_list();
 
-    // Check Go installation first
-    let go_installed = std::process::Command::new("which")
-        .arg("go")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if !go_installed {
+    // Check Go installation
+    let go_path = discover_tool_path("go");
+    if let Some(ref gp) = go_path {
+        println!("{}", format!("✓ Go is installed → {}", gp.display()).green());
+    } else {
         println!("{}", "⚠️  Go is NOT installed! Most tools require Go to install.".red().bold());
         println!("{}", "   Install Go from: https://go.dev/dl/".yellow());
         println!("{}", "   Or run: apt-get install golang-go".yellow());
-        println!();
-    } else {
-        println!("{}", "✓ Go is installed".green());
-        println!();
     }
+    println!();
 
     // Core tools
     println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
@@ -2591,7 +2942,8 @@ async fn check_tools_status() {
 
     for tool in tools.iter().filter(|t| t.is_core) {
         let (installed, version) = check_tool_installed(tool.binary).await;
-        print_tool_status(tool, installed, version.as_deref());
+        let tool_path = discovered.get(tool.binary);
+        print_tool_status_with_path(tool, installed, version.as_deref(), tool_path);
         if !installed {
             core_missing += 1;
         }
@@ -2605,9 +2957,30 @@ async fn check_tools_status() {
 
     for tool in tools.iter().filter(|t| !t.is_core) {
         let (installed, version) = check_tool_installed(tool.binary).await;
-        print_tool_status(tool, installed, version.as_deref());
+        let tool_path = discovered.get(tool.binary);
+        print_tool_status_with_path(tool, installed, version.as_deref(), tool_path);
         if !installed {
             optional_missing += 1;
+        }
+    }
+
+    // Show PATH configuration
+    println!();
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+    println!("{}", "  DISCOVERED PATHS".white().bold());
+    println!("{}", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━".white());
+
+    let mut unique_dirs: std::collections::HashSet<String> = std::collections::HashSet::new();
+    for path in discovered.values() {
+        if let Some(parent) = path.parent() {
+            unique_dirs.insert(parent.to_string_lossy().to_string());
+        }
+    }
+    if unique_dirs.is_empty() {
+        println!("{}", "  No tool directories discovered outside of PATH".dimmed());
+    } else {
+        for dir in &unique_dirs {
+            println!("  {} {}", "→".cyan(), dir);
         }
     }
 
@@ -2616,6 +2989,10 @@ async fn check_tools_status() {
     println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
     println!("{}", "║  SUMMARY                                                                     ║".cyan().bold());
     println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+
+    let found_count = discovered.len();
+    let total_count = tools.len();
+    println!("{}", format!("  Tools found: {}/{}", found_count, total_count).white());
 
     if core_missing > 0 {
         println!("{}", format!("  ⚠️  {} core tool(s) missing - some features won't work!", core_missing).red().bold());
@@ -2634,8 +3011,8 @@ async fn check_tools_status() {
     println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".cyan().bold());
 }
 
-/// Print status of a single tool
-fn print_tool_status(tool: &ToolInfo, installed: bool, version: Option<&str>) {
+/// Print status of a single tool with discovered path
+fn print_tool_status_with_path(tool: &ToolInfo, installed: bool, version: Option<&str>, path: Option<&PathBuf>) {
     let status_icon = if installed { "✓".green() } else { "✗".red() };
     let name_colored = if installed {
         tool.name.green()
@@ -2644,19 +3021,27 @@ fn print_tool_status(tool: &ToolInfo, installed: bool, version: Option<&str>) {
     };
 
     let version_str = if let Some(v) = version {
-        // Truncate version to 40 chars max
-        let truncated = if v.len() > 40 { &v[..40] } else { v };
+        let truncated = if v.len() > 30 { &v[..30] } else { v };
         format!("({})", truncated).dimmed().to_string()
     } else {
         "".to_string()
     };
 
+    let path_str = if let Some(p) = path {
+        format!("→ {}", p.display()).dimmed().to_string()
+    } else if !installed {
+        format!("Install: {}", tool.install_cmd).dimmed().to_string()
+    } else {
+        "".to_string()
+    };
+
     println!(
-        "  {} {:<15} - {:<40} {}",
+        "  {} {:<15} - {:<35} {} {}",
         status_icon,
         name_colored,
         tool.description,
-        version_str
+        version_str,
+        path_str
     );
 }
 
@@ -2667,12 +3052,13 @@ async fn install_all_tools() -> Result<()> {
     println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".green().bold());
     println!();
 
-    // Check if Go is installed
-    let go_installed = std::process::Command::new("which")
-        .arg("go")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    // Auto-discover existing tools first
+    println!("{}", "[*] Auto-discovering already installed tools...".cyan());
+    let _ = auto_discover_and_configure_path();
+    println!();
+
+    // Check if Go is installed (using discovery)
+    let go_installed = discover_tool_path("go").is_some();
 
     if !go_installed {
         println!("{}", "⚠️  Go is NOT installed! Installing Go first...".yellow().bold());

@@ -72,6 +72,12 @@ pub struct AdminConfig {
     pub setup_completed: bool,
     pub created_at: String,
     pub last_password_change: String,
+    #[serde(default = "default_false")]
+    pub must_change_password: bool,
+}
+
+fn default_false() -> bool {
+    false
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,6 +95,7 @@ pub struct LoginRequest {
 #[derive(Debug, Serialize)]
 pub struct LoginResponse {
     token: String,
+    must_change_password: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -114,6 +121,7 @@ pub struct SetupResponse {
 pub struct SetupStatusResponse {
     setup_completed: bool,
     username: Option<String>,
+    must_change_password: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -505,6 +513,36 @@ pub struct ScanProgress {
     pub events: Vec<ProgressEvent>,
 }
 
+// Estruturas para Infrastructure
+#[derive(Debug, Serialize)]
+struct InfrastructureScan {
+    scan_id: String,
+    target_range: String,
+    total_hosts_scanned: usize,
+    hosts_up: usize,
+    total_ports_found: usize,
+    total_vulnerabilities_found: usize,
+    start_time: String,
+}
+
+#[derive(Debug, Serialize)]
+struct InfrastructurePort {
+    port: u16,
+    protocol: String,
+    state: String,
+    service: String,
+    version: Option<String>,
+    banner: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct InfrastructureService {
+    service_name: String,
+    port: u16,
+    count: usize,
+    hosts: Vec<String>,
+}
+
 // Estruturas para GitHub
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct GitHubConfig {
@@ -697,7 +735,7 @@ async fn login(
                     .into_response()
             })?;
 
-            Ok(Json(LoginResponse { token }))
+            Ok(Json(LoginResponse { token, must_change_password: config.must_change_password }))
         }
         _ => Err((
             StatusCode::UNAUTHORIZED,
@@ -1121,6 +1159,12 @@ async fn get_s3_buckets(
     Ok(Json(buckets))
 }
 
+// Query parameter para listar arquivos com suporte a subdiretórios
+#[derive(Debug, Deserialize)]
+struct FileListQuery {
+    path: Option<String>,
+}
+
 // Estrutura para listar arquivos
 #[derive(Debug, Serialize)]
 pub struct FileInfo {
@@ -1137,19 +1181,45 @@ pub struct FileContent {
     pub size: u64,
 }
 
-// Endpoint para listar arquivos de um domínio
+// Endpoint para listar arquivos de um domínio (com suporte a subdiretórios)
 async fn list_domain_files(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
     Path(domain): Path<String>,
+    Query(query): Query<FileListQuery>,
 ) -> Result<Json<Vec<FileInfo>>, Response> {
     verify_token(&headers)?;
 
     let domain_path = state.base_path.join(&domain);
+
+    // Se um subpath foi fornecido, navegar para ele
+    let target_path = if let Some(ref sub_path) = query.path {
+        domain_path.join(sub_path)
+    } else {
+        domain_path.clone()
+    };
+
+    // Verificação de segurança contra path traversal
+    let canonical_base = match fs::canonicalize(&domain_path) {
+        Ok(p) => p,
+        Err(_) => {
+            return Ok(Json(Vec::new()));
+        }
+    };
+    let canonical_target = match fs::canonicalize(&target_path) {
+        Ok(p) => p,
+        Err(_) => {
+            return Ok(Json(Vec::new()));
+        }
+    };
+    if !canonical_target.starts_with(&canonical_base) {
+        return Err((StatusCode::FORBIDDEN, "Acesso negado").into_response());
+    }
+
     let mut files = Vec::new();
 
-    if domain_path.exists() && domain_path.is_dir() {
-        if let Ok(entries) = fs::read_dir(&domain_path) {
+    if target_path.exists() && target_path.is_dir() {
+        if let Ok(entries) = fs::read_dir(&target_path) {
             for entry in entries.flatten() {
                 if let Ok(metadata) = entry.metadata() {
                     let name = entry.file_name().to_string_lossy().to_string();
@@ -1394,6 +1464,194 @@ async fn get_domain_data(
         open_ports,
         systems,
     }))
+}
+
+// Helper: collect domain directories (filters out cargo/project dirs)
+fn collect_domain_dirs(base_path: &std::path::Path) -> Vec<PathBuf> {
+    let cargo_dirs = [
+        "build", "deps", "examples", "incremental", ".fingerprint",
+        "target", "src", "dashboard-ui", "test_domain",
+        "docs", "k8s", "bin"
+    ];
+
+    let mut dirs = Vec::new();
+    if let Ok(entries) = fs::read_dir(base_path) {
+        for entry in entries.flatten() {
+            if entry.path().is_dir() {
+                let name = entry.file_name().to_string_lossy().to_string();
+                if name.starts_with('.') || cargo_dirs.contains(&name.as_str()) {
+                    continue;
+                }
+                if name.starts_with("file_domains_") {
+                    if let Ok(sub_entries) = fs::read_dir(entry.path()) {
+                        for sub_entry in sub_entries.flatten() {
+                            if sub_entry.path().is_dir() {
+                                let sub_name = sub_entry.file_name().to_string_lossy().to_string();
+                                if !sub_name.starts_with('.') {
+                                    dirs.push(sub_entry.path());
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    dirs.push(entry.path());
+                }
+            }
+        }
+    }
+    dirs
+}
+
+// Endpoint para listar scans de infraestrutura
+async fn get_infrastructure_scans(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<InfrastructureScan>>, Response> {
+    verify_token(&headers)?;
+
+    let domain_dirs = collect_domain_dirs(&state.base_path);
+    let mut scans = Vec::new();
+
+    for dir in &domain_dirs {
+        let domain_name = dir.file_name().unwrap_or_default().to_string_lossy().to_string();
+
+        // Count subdomains/hosts
+        let subdomains_path = dir.join("subdomains.txt");
+        let (total_hosts, hosts_up) = if subdomains_path.exists() {
+            if let Ok(content) = fs::read_to_string(&subdomains_path) {
+                let lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                (lines.len(), lines.len())
+            } else {
+                (0, 0)
+            }
+        } else {
+            (0, 0)
+        };
+
+        // Count ports
+        let ports_path = dir.join("ports.txt");
+        let total_ports = parse_ports_txt(&ports_path).len();
+
+        // Count vulnerabilities from nuclei output
+        let nuclei_path = dir.join("files_").join("nuclei.txt");
+        let nuclei_alt = dir.join("nuclei.txt");
+        let nuclei_file = if nuclei_path.exists() { &nuclei_path } else { &nuclei_alt };
+        let total_vulns = if nuclei_file.exists() {
+            if let Ok(content) = fs::read_to_string(nuclei_file) {
+                content.lines().filter(|l| {
+                    let trimmed = l.trim();
+                    !trimmed.is_empty() && (trimmed.starts_with('{') || trimmed.contains("\"template-id\""))
+                }).count()
+            } else {
+                0
+            }
+        } else {
+            0
+        };
+
+        // Get modification time for start_time
+        let start_time = if let Ok(metadata) = fs::metadata(dir) {
+            if let Ok(modified) = metadata.modified() {
+                let datetime: chrono::DateTime<chrono::Utc> = modified.into();
+                datetime.format("%Y-%m-%dT%H:%M:%SZ").to_string()
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        };
+
+        // Generate scan_id from domain name
+        let scan_id = format!("{:x}", md5_hash(&domain_name));
+
+        // Only include dirs that look like actual scan results
+        if total_hosts > 0 || total_ports > 0 || total_vulns > 0 {
+            scans.push(InfrastructureScan {
+                scan_id,
+                target_range: domain_name,
+                total_hosts_scanned: total_hosts,
+                hosts_up,
+                total_ports_found: total_ports,
+                total_vulnerabilities_found: total_vulns,
+                start_time,
+            });
+        }
+    }
+
+    Ok(Json(scans))
+}
+
+// Simple hash for scan_id generation
+fn md5_hash(input: &str) -> u64 {
+    let mut hash: u64 = 0xcbf29ce484222325;
+    for byte in input.bytes() {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+    }
+    hash
+}
+
+// Endpoint para listar portas de infraestrutura
+async fn get_infrastructure_ports(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<InfrastructurePort>>, Response> {
+    verify_token(&headers)?;
+
+    let domain_dirs = collect_domain_dirs(&state.base_path);
+    let mut seen = std::collections::HashSet::new();
+    let mut ports = Vec::new();
+
+    for dir in &domain_dirs {
+        let ports_path = dir.join("ports.txt");
+        for open_port in parse_ports_txt(&ports_path) {
+            let key = (open_port.host.clone(), open_port.port);
+            if seen.insert(key) {
+                ports.push(InfrastructurePort {
+                    port: open_port.port,
+                    protocol: open_port.protocol,
+                    state: "open".to_string(),
+                    service: open_port.service,
+                    version: None,
+                    banner: None,
+                });
+            }
+        }
+    }
+
+    Ok(Json(ports))
+}
+
+// Endpoint para listar serviços de infraestrutura
+async fn get_infrastructure_services(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+) -> Result<Json<Vec<InfrastructureService>>, Response> {
+    verify_token(&headers)?;
+
+    let domain_dirs = collect_domain_dirs(&state.base_path);
+    let mut service_map: std::collections::HashMap<String, InfrastructureService> = std::collections::HashMap::new();
+
+    for dir in &domain_dirs {
+        let ports_path = dir.join("ports.txt");
+        for open_port in parse_ports_txt(&ports_path) {
+            let entry = service_map.entry(open_port.service.clone()).or_insert_with(|| {
+                InfrastructureService {
+                    service_name: open_port.service.clone(),
+                    port: open_port.port,
+                    count: 0,
+                    hosts: Vec::new(),
+                }
+            });
+            entry.count += 1;
+            if !entry.hosts.contains(&open_port.host) {
+                entry.hosts.push(open_port.host.clone());
+            }
+        }
+    }
+
+    let services: Vec<InfrastructureService> = service_map.into_values().collect();
+    Ok(Json(services))
 }
 
 // Endpoint para obter progresso de um scan
@@ -2648,13 +2906,15 @@ async fn check_setup_status(
         Some(config) if config.setup_completed => {
             Ok(Json(SetupStatusResponse {
                 setup_completed: true,
-                username: Some(config.username),
+                username: Some(config.username.clone()),
+                must_change_password: config.must_change_password,
             }))
         }
         _ => {
             Ok(Json(SetupStatusResponse {
                 setup_completed: false,
                 username: None,
+                must_change_password: false,
             }))
         }
     }
@@ -2723,6 +2983,7 @@ async fn initial_setup(
         setup_completed: true,
         created_at: now.clone(),
         last_password_change: now,
+        must_change_password: false,
     };
 
     // Salvar no estado
@@ -2803,6 +3064,7 @@ async fn change_password(
             // Atualizar configuração
             config.password_hash = new_hash;
             config.last_password_change = Utc::now().to_rfc3339();
+            config.must_change_password = false;
 
             // Salvar no estado
             if let Ok(mut admin) = state.admin_config.lock() {
@@ -2854,7 +3116,7 @@ pub fn create_router(base_path: PathBuf) -> Router {
         None
     };
 
-    // Carregar configuração de admin do arquivo se existir
+    // Load admin config from file, or create default admin/enumrust
     let admin_file = base_path.join(".admin_config.json");
     let saved_admin = if admin_file.exists() {
         if let Ok(content) = fs::read_to_string(&admin_file) {
@@ -2864,6 +3126,30 @@ pub fn create_router(base_path: PathBuf) -> Router {
         }
     } else {
         None
+    };
+    let saved_admin = match saved_admin {
+        Some(config) => Some(config),
+        None => {
+            // Auto-create default admin account: admin / enumrust
+            let default_hash = bcrypt::hash("enumrust", bcrypt::DEFAULT_COST)
+                .expect("Failed to hash default password");
+            let now = Utc::now().to_rfc3339();
+            let default_config = AdminConfig {
+                username: "admin".to_string(),
+                password_hash: default_hash,
+                setup_completed: true,
+                created_at: now.clone(),
+                last_password_change: now,
+                must_change_password: true,
+            };
+            // Save default config to file
+            if let Ok(json_content) = serde_json::to_string_pretty(&default_config) {
+                let _ = fs::write(&admin_file, json_content);
+            }
+            println!("📋 Default credentials created: admin / enumrust");
+            println!("⚠️  You will be required to change the password on first login.");
+            Some(default_config)
+        }
     };
 
     let state = Arc::new(AppState {
@@ -2900,6 +3186,9 @@ pub fn create_router(base_path: PathBuf) -> Router {
         .route("/api/domain/:domain/validated_hosts", get(get_validated_hosts))
         .route("/api/domain/:domain/packages", get(get_package_dependencies))
         .route("/api/domain/:domain/dependency_confusion", get(get_dependency_confusion))
+        .route("/api/infrastructure/scans", get(get_infrastructure_scans))
+        .route("/api/infrastructure/ports", get(get_infrastructure_ports))
+        .route("/api/infrastructure/services", get(get_infrastructure_services))
         .route("/api/file/*file_path", get(read_file_content))
         .route("/api/scans", get(list_scans))
         .route("/api/scan/:target/progress", get(get_scan_progress))
