@@ -1,6 +1,6 @@
 [package]
 name = "enumrust"
-version = "2.2.0"
+version = "2.3.0"
 edition = "2021"
 description = "Advanced Security Scanner & Vulnerability Hunter"
 authors = ["OFJAAAH <ofjaaah@users.noreply.github.com>"]
