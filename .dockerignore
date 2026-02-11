@@ -1,0 +1,16 @@
+target/
+.git/
+.github/
+.claude/
+*.com/
+scan_results/
+results*/
+.env
+.env.*
+*.md
+!README.md
+LICENSE
+assets/
+.gitignore
+.dockerignore
+Dockerfile

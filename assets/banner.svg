@@ -49,7 +49,7 @@
   <!-- Version badge -->
   <rect x="340" y="165" width="120" height="24" rx="12" fill="#10b981" opacity="0.2"/>
   <rect x="340" y="165" width="120" height="24" rx="12" fill="none" stroke="#10b981" stroke-width="1"/>
-  <text x="400" y="182" font-family="monospace" font-size="12" fill="#10b981" text-anchor="middle">v2.2.0</text>
+  <text x="400" y="182" font-family="monospace" font-size="12" fill="#10b981" text-anchor="middle">v2.3.0</text>
 
   <!-- Feature icons row -->
   <g transform="translate(100, 220)">

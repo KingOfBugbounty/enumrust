@@ -1,4 +1,4 @@
-// main.rs - EnumRust v2.2.0 - Advanced Security Reconnaissance Tool
+// main.rs - EnumRust v2.3.0 - Advanced Security Reconnaissance Tool
 // Purpose: Complete domain enumeration, subdomain discovery, port scanning,
 //          JS analysis, package scanning, secrets detection, and vulnerability assessment
 // Author: Claude Code (Anthropic)

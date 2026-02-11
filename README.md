@@ -8,6 +8,7 @@
 
 [![Rust](https://img.shields.io/badge/rust-%23000000.svg?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg?style=for-the-badge)](LICENSE)
+[![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=for-the-badge&logo=docker&logoColor=white)](DOCKER.md)
 [![GitHub](https://img.shields.io/badge/GitHub-@ofjaaah-181717?style=for-the-badge&logo=github)](https://github.com/ofjaaah)
 
 </div>
@@ -37,7 +38,7 @@
 
 ---
 
-## 🆕 Recent Improvements (v2.2.0)
+## 🆕 Recent Improvements (v2.3.0)
 
 ### Advanced Secrets Scanner
 - **70+ Token Patterns** - GitHub (PAT, OAuth, App), AWS, GCP, Azure, Vercel, Stripe, Twilio, SendGrid, Slack, Discord, and more
@@ -124,6 +125,35 @@ cargo build --release
 2. Use the **Setup Code** displayed in terminal (generated randomly each startup)
 3. Create your own username and password
 4. Login and start monitoring your scans
+
+---
+
+## 🐳 Docker Installation
+
+Run EnumRust with **all 19 tools pre-installed** using Docker - zero configuration required.
+
+```bash
+# Build
+docker build -t enumrust .
+
+# Verify all 19 tools
+docker run --rm enumrust --check-tools
+
+# Run a scan
+docker run --rm --privileged \
+  -v $(pwd)/results:/results \
+  enumrust -d target.com --subfinder --full-scan
+
+# Dashboard mode
+docker run --rm --privileged \
+  -p 8080:8080 \
+  -v $(pwd)/results:/results \
+  enumrust -d target.com --dashboard --full-scan
+```
+
+> **Note:** `--privileged` is required for masscan (raw socket access). Omit it if you don't need port scanning.
+
+👉 **[Full Docker Guide](DOCKER.md)** - Complete instructions, examples, volume mounts, troubleshooting, and more
 
 ---
 
