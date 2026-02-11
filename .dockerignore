@@ -12,5 +12,3 @@ results*/
 LICENSE
 assets/
 .gitignore
-.dockerignore
-Dockerfile
