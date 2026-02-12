@@ -3232,8 +3232,8 @@ pub async fn start_dashboard_server(base_path: PathBuf, port: u16) -> anyhow::Re
     let addr = format!("0.0.0.0:{}", port);
 
     println!("🚀 Dashboard server starting on http://{}", addr);
-    println!("📊 Access the dashboard and complete the initial setup");
-    println!("   Setup Code: {}", *SETUP_CODE);
+    println!("📊 Access the dashboard at http://{}", addr);
+    println!("🔑 Default credentials: admin / enumrust (password change required on first login)");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
 

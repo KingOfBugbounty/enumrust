@@ -426,8 +426,62 @@ async fn main() -> Result<()> {
     }
 
     // Mode selection: dashboard, file, or single domain scan
-    if args.dashboard {
-        // Run dashboard mode
+    if args.dashboard && args.domain.is_some() {
+        // Dashboard + Domain scan mode: run both concurrently
+        let domain = args.domain.as_ref().unwrap().clone();
+        let port = args.dashboard_port;
+        println!("{}", format!("[*] Starting EnumRust Dashboard + Scan mode on port {}...", port).cyan());
+        println!("{}", format!("[*] Target: {}", domain).green().bold());
+
+        // Start dashboard in background
+        tokio::spawn(async move {
+            let base_path = std::path::PathBuf::from(".");
+            let _ = dashboard::start_dashboard_server(base_path, port).await;
+        });
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        println!("{}", format!("🚀 Dashboard disponível em http://0.0.0.0:{}", port).green().bold());
+        println!("{}", "   Acesse o dashboard para acompanhar o progresso em tempo real".cyan());
+        println!();
+
+        // Run domain scan
+        process_domain(&domain, &args).await?;
+
+        // After scan completes, keep dashboard alive
+        println!();
+        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
+        println!("{}", "✅ Scan completo! Dashboard continua ativo para visualização.".green().bold());
+        println!("{}", format!("🌐 Acesse: http://0.0.0.0:{}", port).cyan());
+        println!("{}", "   Pressione Ctrl+C para encerrar.".cyan());
+        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
+        tokio::signal::ctrl_c().await?;
+    } else if args.dashboard && args.file.is_some() {
+        // Dashboard + File scan mode: run both concurrently
+        let file_path = args.file.as_ref().unwrap().clone();
+        let port = args.dashboard_port;
+        println!("{}", format!("[*] Starting EnumRust Dashboard + File scan mode on port {}...", port).cyan());
+
+        // Start dashboard in background
+        tokio::spawn(async move {
+            let base_path = std::path::PathBuf::from(".");
+            let _ = dashboard::start_dashboard_server(base_path, port).await;
+        });
+        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
+        println!("{}", format!("🚀 Dashboard disponível em http://0.0.0.0:{}", port).green().bold());
+        println!();
+
+        // Run file scan
+        process_domains_from_file(&file_path, &args).await?;
+
+        // After scan completes, keep dashboard alive
+        println!();
+        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
+        println!("{}", "✅ Scan completo! Dashboard continua ativo para visualização.".green().bold());
+        println!("{}", format!("🌐 Acesse: http://0.0.0.0:{}", port).cyan());
+        println!("{}", "   Pressione Ctrl+C para encerrar.".cyan());
+        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
+        tokio::signal::ctrl_c().await?;
+    } else if args.dashboard {
+        // Dashboard-only mode (no scan)
         println!("{}", format!("[*] Starting EnumRust Dashboard on port {}...", args.dashboard_port).cyan());
         run_dashboard(args.dashboard_port).await?;
     } else if let Some(ref file_path) = args.file {
@@ -438,7 +492,7 @@ async fn main() -> Result<()> {
         // ═══════════════════════════════════════════════════════════════════════════
         // TMUX AUTO-START: Se não estiver em tmux, criar sessão automaticamente
         // ═══════════════════════════════════════════════════════════════════════════
-        if !is_running_in_tmux() {
+        if !is_running_in_tmux() && !is_running_in_docker() {
             println!("{}", "🔍 Detectado scan CLI - Iniciando em modo TMUX persistente...".cyan().bold());
             println!("{}", "   Isso garante que o scan continue mesmo se você desconectar SSH!".cyan());
             println!();
@@ -648,6 +702,11 @@ fn is_running_in_tmux() -> bool {
     }
 
     false
+}
+
+/// Check if running inside a Docker container
+fn is_running_in_docker() -> bool {
+    std::path::Path::new("/.dockerenv").exists()
 }
 
 /// Check if tmux is installed
@@ -1782,7 +1841,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     // ═══════════════════════════════════════════════════════════════════════════
     // STAGE 10.5: INFORMATION DISCLOSURE SCANNING (S3, Actuator, GraphQL)
     // ═══════════════════════════════════════════════════════════════════════════
-    let disclosure_results = if args.disclosure_scan || args.s3_scan || args.actuator_scan || args.graphql_scan || args.full_scan {
+    let _disclosure_results = if args.disclosure_scan || args.s3_scan || args.actuator_scan || args.graphql_scan || args.full_scan {
         println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".cyan().bold());
         println!("{}", "║  🔓 STAGE 10.5: INFORMATION DISCLOSURE SCANNING                               ║".cyan().bold());
         println!("{}", "║     S3/Cloud Storage | Spring Actuator | GraphQL Introspection               ║".cyan());
