@@ -2,7 +2,7 @@
 
 <div align="center">
 
-<img src="assets/banner.svg" width="700" alt="EnumRust Banner" />
+<img src="assets/banner.png" width="700" alt="EnumRust Banner" />
 
 **A comprehensive Rust-based security enumeration tool with real-time dashboard**
 
