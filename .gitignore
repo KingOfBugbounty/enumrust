@@ -109,3 +109,9 @@ desktop.ini
 
 # Node modules (se houver frontend com npm)
 node_modules/
+
+# Dashboard UI build
+dashboard-ui/
+
+# Dockerignore files
+*.dockerignore
