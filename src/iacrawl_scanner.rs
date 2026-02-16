@@ -1,6 +1,5 @@
 // iacrawl_scanner.rs - IACrawl Integration for EnumRust
 // Purpose: Scan for Vercel + Supabase credential exposure vulnerabilities
-// Integrates with: /root/PENTEST/IAcrawl/iacrawl/target/release/iacrawl
 
 use anyhow::{Context, Result};
 use colored::*;
@@ -10,8 +9,34 @@ use std::process::Stdio;
 use tokio::fs;
 use tokio::process::Command;
 
-/// Path to the iacrawl binary
-const IACRAWL_BINARY: &str = "/root/PENTEST/IAcrawl/iacrawl/target/release/iacrawl";
+/// Find iacrawl binary - checks PATH, env var, and known locations
+fn find_iacrawl_binary() -> String {
+    // 1. Check env var
+    if let Ok(p) = std::env::var("IACRAWL_BIN") {
+        if Path::new(&p).exists() { return p; }
+    }
+    // 2. Check PATH (which iacrawl)
+    if let Ok(o) = std::process::Command::new("which").arg("iacrawl").output() {
+        if o.status.success() {
+            let p = String::from_utf8_lossy(&o.stdout).trim().to_string();
+            if !p.is_empty() && Path::new(&p).exists() { return p; }
+        }
+    }
+    // 3. Known locations
+    let known = [
+        dirs::home_dir().map(|h| format!("{}/PENTEST/IAcrawl/iacrawl/target/release/iacrawl", h.display())).unwrap_or_default(),
+        "/root/PENTEST/IAcrawl/iacrawl/target/release/iacrawl".into(),
+        "/usr/local/bin/iacrawl".into(),
+    ];
+    for p in &known {
+        if !p.is_empty() && Path::new(p).exists() { return p.clone(); }
+    }
+    "iacrawl".into() // fallback to PATH
+}
+
+lazy_static::lazy_static! {
+    static ref IACRAWL_BINARY: String = find_iacrawl_binary();
+}
 
 /// Vercel site detection result
 #[derive(Debug, Clone, Serialize, Deserialize)]

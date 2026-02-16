@@ -2001,9 +2001,13 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
 
     progress.tool_started("Feroxbuster");
 
-    // Try to find wordlist
+    // Try to find wordlist - auto-detect relative to binary
+    let exe_dir_ferox = std::env::current_exe().ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+    let dynamic_wordlist = format!("{}/../../src/words_and_files_top5000.txt", exe_dir_ferox.display());
     let wordlist_paths = [
-        "/root/PENTEST/enumrust/enumrust/src/words_and_files_top5000.txt",
+        dynamic_wordlist.as_str(),
         "src/words_and_files_top5000.txt",
         "./src/words_and_files_top5000.txt",
         "/usr/share/wordlists/dirb/common.txt",

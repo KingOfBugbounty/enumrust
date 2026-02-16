@@ -354,15 +354,27 @@ fn find_wordlist(config: &IpScanConfig) -> Option<String> {
         }
     }
 
-    // Try common wordlist locations
-    let wordlist_paths = [
-        "/root/PENTEST/enumrust/enumrust/src/words_and_files_top5000.txt",
+    // Try common wordlist locations - auto-detect relative to binary
+    let exe_dir = std::env::current_exe().ok()
+        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+        .unwrap_or_default();
+    let wordlist_paths_dynamic = [
+        format!("{}/../../src/words_and_files_top5000.txt", exe_dir.display()),
+        format!("{}/words_and_files_top5000.txt", exe_dir.display()),
+    ];
+    let wordlist_paths_static = [
         "./src/words_and_files_top5000.txt",
         "/usr/share/wordlists/dirb/common.txt",
         "/usr/share/wordlists/dirbuster/directory-list-2.3-medium.txt",
         "/usr/share/seclists/Discovery/Web-Content/common.txt",
         "/usr/share/seclists/Discovery/Web-Content/directory-list-2.3-small.txt",
     ];
+    for path in &wordlist_paths_dynamic {
+        if Path::new(path).exists() {
+            return Some(path.to_string());
+        }
+    }
+    let wordlist_paths = wordlist_paths_static;
 
     for path in wordlist_paths {
         if Path::new(path).exists() {
