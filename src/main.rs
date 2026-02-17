@@ -33,6 +33,7 @@ mod report_generator;
 mod secret_validators;
 mod secrets_scanner;
 mod info_disclosure_scanner;
+mod ollama;
 
 use metrics::EnumRustMetrics;
 use progress::{EventType, ProgressTracker};
@@ -365,6 +366,15 @@ struct Args {
     #[arg(long, help_heading = "Tool Management",
           help = "Force re-discovery and re-validation of all tools (clears cache)")]
     revalidate_tools: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AI ANALYSIS OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Enable deep exploit analysis with The-Xploiter AI model
+    #[arg(long, help_heading = "AI Analysis",
+          help = "Use xploiter/the-xploiter model for deep exploit analysis, attack chains, and payload suggestions")]
+    xploiter: bool,
 }
 
 /// Main entry point
@@ -590,6 +600,9 @@ async fn main() -> Result<()> {
                 if args.ip_fuzz_timeout != 60 {
                     cmd_args.push("--ip-fuzz-timeout".to_string());
                     cmd_args.push(args.ip_fuzz_timeout.to_string());
+                }
+                if args.xploiter {
+                    cmd_args.push("--xploiter".to_string());
                 }
 
                 let cmd_string = format!("{} {}", current_exe.display(), cmd_args.join(" "));
@@ -875,6 +888,9 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         .timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(true)
         .build()?;
+
+    // Initialize Ollama AI client (auto-installs, auto-starts, auto-pulls model)
+    let ollama = ollama::OllamaClient::new().await;
 
     // ═══════════════════════════════════════════════════════════════════════════
     // STAGE 1: WHOIS LOOKUP (Optional, 0-5%)
@@ -1419,7 +1435,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
 
     // Run comprehensive JS crawler
     let validate_tokens = args.full_scan; // Only validate tokens in full scan mode
-    let (enhanced_secrets, enhanced_endpoints, enhanced_cloud_storage, discovered_js_files) =
+    let (mut enhanced_secrets, enhanced_endpoints, enhanced_cloud_storage, discovered_js_files) =
         js_crawler::crawl_all_js_sources(
             &base_path,
             &http200_urls,
@@ -1428,6 +1444,32 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
             args.workers,
         )
         .await;
+
+    // AI Filter: Validate secrets with Ollama to remove false positives
+    if ollama.is_available().await && !enhanced_secrets.is_empty() {
+        println!("{}", "[AI] Filtrando secrets com Ollama para remover falsos positivos...".cyan());
+        let before_count = enhanced_secrets.len();
+        let mut filtered = Vec::new();
+        for secret in &enhanced_secrets {
+            let verdict = ollama.analyze_secret(
+                &secret.secret_type,
+                &secret.secret_preview,
+                &secret.context,
+                &secret.found_in_url,
+            ).await;
+            match verdict {
+                Some(v) if !v.is_real && v.confidence >= 70 => {
+                    println!("{}", format!("  [AI] FP removido: {} em {} ({})", secret.secret_type, secret.found_in_url, v.reason).bright_black());
+                }
+                _ => filtered.push(secret.clone()),
+            }
+        }
+        let removed = before_count - filtered.len();
+        if removed > 0 {
+            println!("{}", format!("[AI] Secrets: {} falsos positivos removidos ({} reais restantes)", removed, filtered.len()).green());
+        }
+        enhanced_secrets = filtered;
+    }
 
     // Save JS analysis results
     let js_secrets_file = base_path.join("js_secrets_enhanced.json");
@@ -1440,6 +1482,139 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     let js_cloud_storage_file = base_path.join("js_cloud_storage.json");
     let js_cloud_json = serde_json::to_string_pretty(&enhanced_cloud_storage)?;
     fs::write(&js_cloud_storage_file, js_cloud_json)?;
+
+    // ═══════════════════════════════════════════════════════════════
+    // SUPABASE KEY EXPLOITATION
+    // ═══════════════════════════════════════════════════════════════
+    {
+        // Find Supabase secrets and URLs from enhanced_secrets
+        let supabase_keys: Vec<&secrets_scanner::HardcodedSecret> = enhanced_secrets.iter()
+            .filter(|s| s.secret_type.starts_with("SUPABASE_") && s.secret_type != "SUPABASE_URL")
+            .collect();
+
+        let supabase_url: Option<String> = enhanced_secrets.iter()
+            .find(|s| s.secret_type == "SUPABASE_URL")
+            .map(|s| s.secret_value.clone())
+            .or_else(|| {
+                // Try to extract from context of any Supabase key
+                enhanced_secrets.iter()
+                    .filter(|s| s.secret_type.starts_with("SUPABASE_"))
+                    .find_map(|s| {
+                        let re = regex::Regex::new(r"https://[a-z0-9]+\.supabase\.co").ok()?;
+                        re.find(&s.context).map(|m| m.as_str().to_string())
+                    })
+            });
+
+        if !supabase_keys.is_empty() {
+            println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".magenta().bold());
+            println!("{}", "║  🔮 SUPABASE EXPLOITATION - Testing Discovered Keys                           ║".magenta().bold());
+            println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".magenta().bold());
+
+            println!("{}", format!("[*] Found {} Supabase key(s) in JavaScript files", supabase_keys.len()).cyan());
+
+            if let Some(ref supa_url) = supabase_url {
+                println!("{}", format!("[*] Supabase URL: {}", supa_url).cyan());
+
+                let mut exploit_results: Vec<secrets_scanner::SupabaseExploitResult> = Vec::new();
+
+                for (idx, key_secret) in supabase_keys.iter().enumerate() {
+                    let key_type = if key_secret.secret_type.contains("SERVICE_ROLE") {
+                        "service_role"
+                    } else if key_secret.secret_type.contains("ANON") {
+                        "anon"
+                    } else {
+                        "unknown"
+                    };
+
+                    println!("{}", format!("\n   🔑 [{}/{}] Testing {} key...", idx + 1, supabase_keys.len(), key_type).yellow());
+
+                    let result = secrets_scanner::validate_supabase_key(
+                        supa_url,
+                        &key_secret.secret_value,
+                        key_type,
+                        key_secret.js_source_url.as_deref().unwrap_or(&key_secret.found_in_url),
+                        &client,
+                    ).await;
+
+                    // Display results
+                    println!("{}", format!("      ├─ Severity: {}", result.severity).color(
+                        if result.severity == "CRITICAL" { "red" } else { "yellow" }
+                    ));
+                    println!("{}", format!("      ├─ Signup: {}", if result.signup_enabled { "OPEN" } else { "Disabled" }).color(
+                        if result.signup_enabled { "red" } else { "green" }
+                    ));
+                    println!("{}", format!("      ├─ Tables found: {}", result.tables_accessible.len()).cyan());
+                    if !result.tables_accessible.is_empty() {
+                        let tables_preview: Vec<&str> = result.tables_accessible.iter().take(5).map(|s| s.as_str()).collect();
+                        println!("{}", format!("      │  └─ {}", tables_preview.join(", ")).bright_black());
+                    }
+                    println!("{}", format!("      ├─ Data exposed: {}", if !result.sample_data.is_empty() { "YES" } else { "No" }).color(
+                        if !result.sample_data.is_empty() { "red" } else { "green" }
+                    ));
+
+                    for finding in &result.findings {
+                        println!("{}", format!("      │  ⚡ {}", finding).yellow());
+                    }
+
+                    exploit_results.push(result);
+                }
+
+                // AI analysis with Ollama
+                let mut ollama_analysis: Option<String> = None;
+                if ollama.is_available().await && !exploit_results.is_empty() {
+                    println!("{}", "\n[AI] Analisando vulnerabilidades Supabase com Ollama...".cyan());
+
+                    let first = &exploit_results[0];
+                    let ai_result = ollama.analyze_supabase_finding(
+                        supa_url,
+                        &first.key_type,
+                        &first.source_js_url,
+                        first.signup_enabled,
+                        &first.tables_accessible,
+                        !first.sample_data.is_empty(),
+                        &first.findings,
+                    ).await;
+
+                    if let Some(ref analysis) = ai_result {
+                        println!("{}", "[AI] Supabase analysis:".green().bold());
+                        for line in analysis.lines().take(8) {
+                            println!("{}", format!("  {}", line).bright_black());
+                        }
+                        ollama_analysis = ai_result;
+                    }
+                }
+
+                // Generate markdown report
+                let report_path = base_path.join("supabase_vulnerability_report.md");
+                match secrets_scanner::generate_supabase_report(
+                    &domain,
+                    &exploit_results,
+                    ollama_analysis.as_deref(),
+                    &report_path,
+                ) {
+                    Ok(_) => {
+                        println!("{}", format!("\n[+] Supabase vulnerability report: {}", report_path.display()).green().bold());
+                    }
+                    Err(e) => {
+                        println!("{}", format!("[-] Error generating Supabase report: {}", e).red());
+                    }
+                }
+
+                // Save JSON results too
+                let exploit_json_path = base_path.join("supabase_exploit_results.json");
+                if let Ok(json) = serde_json::to_string_pretty(&exploit_results) {
+                    let _ = fs::write(&exploit_json_path, json);
+                    println!("{}", format!("[+] Supabase exploit results: {}", exploit_json_path.display()).green());
+                }
+            } else {
+                println!("{}", "[-] Supabase key(s) found but no Supabase URL discovered - cannot test".yellow());
+                println!("{}", "    Keys detected:".yellow());
+                for key in &supabase_keys {
+                    println!("{}", format!("    - {} in {}", key.secret_type, key.found_in_url).yellow());
+                }
+            }
+        }
+    }
 
     // Extract S3 buckets from discovered JS files
     println!("{}", "[*] Extracting S3 buckets from JavaScript files...".cyan());
@@ -1486,13 +1661,40 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         .collect();
 
     // Discover admin panels
-    let admin_panels = admin_finder::discover_admin_panels(
+    let mut admin_panels = admin_finder::discover_admin_panels(
         domain,
         &resolvable_hosts,
         &client,
         args.workers,
     )
     .await;
+
+    // AI Filter: Validate admin panels with Ollama
+    if ollama.is_available().await && !admin_panels.is_empty() {
+        println!("{}", "[AI] Validando admin panels com Ollama...".cyan());
+        let before_count = admin_panels.len();
+        let mut filtered = Vec::new();
+        for panel in &admin_panels {
+            let verdict = ollama.analyze_admin_panel(
+                &panel.url,
+                panel.status_code,
+                panel.title.as_deref().unwrap_or(""),
+                &panel.fingerprint.join(", "),
+                &panel.fingerprint,
+            ).await;
+            match verdict {
+                Some(v) if !v.is_real && v.confidence >= 70 => {
+                    println!("{}", format!("  [AI] Falso positivo removido: {} ({})", panel.url, v.reason).bright_black());
+                }
+                _ => filtered.push(panel.clone()),
+            }
+        }
+        let removed = before_count - filtered.len();
+        if removed > 0 {
+            println!("{}", format!("[AI] Admin panels: {} filtrados como falso positivo ({} restantes)", removed, filtered.len()).green());
+        }
+        admin_panels = filtered;
+    }
 
     // Save admin panel results
     let admin_panels_file = base_path.join("admin_panels.json");
@@ -1559,6 +1761,33 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
             }
         }
 
+        // AI Filter: Validate credential results with Ollama
+        if ollama.is_available().await && !valid_credentials.is_empty() {
+            println!("{}", "[AI] Validando credenciais encontradas com Ollama...".cyan());
+            let before_count = valid_credentials.len();
+            let mut filtered = Vec::new();
+            for cred in &valid_credentials {
+                let verdict = ollama.analyze_credential_result(
+                    &cred.url,
+                    &cred.username,
+                    "",
+                    &cred.response_indicators.join(", "),
+                    200,
+                ).await;
+                match verdict {
+                    Some(v) if !v.is_real && v.confidence >= 75 => {
+                        println!("{}", format!("  [AI] Credencial FP: {}:{} em {} ({})", cred.username, cred.password, cred.url, v.reason).bright_black());
+                    }
+                    _ => filtered.push(cred.clone()),
+                }
+            }
+            let removed = before_count - filtered.len();
+            if removed > 0 {
+                println!("{}", format!("[AI] Credenciais: {} falsos positivos removidos ({} validas)", removed, filtered.len()).green());
+            }
+            valid_credentials = filtered;
+        }
+
         // Save valid credentials
         if !valid_credentials.is_empty() {
             let creds_file = base_path.join("bugbounty_valid_credentials.json");
@@ -1618,12 +1847,38 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     println!("{}", "[*] Scanning JavaScript files for package dependencies...".cyan());
 
     // Scan discovered JS files for packages
-    let package_dependencies = package_scanner::scan_js_for_packages(
+    let mut package_dependencies = package_scanner::scan_js_for_packages(
         &discovered_js_files,
         &client,
         args.workers,
     )
     .await;
+
+    // AI Filter: Validate package findings with Ollama
+    if ollama.is_available().await && !package_dependencies.is_empty() {
+        println!("{}", "[AI] Validando package dependencies com Ollama...".cyan());
+        let before_count = package_dependencies.len();
+        let mut filtered = Vec::new();
+        for pkg in &package_dependencies {
+            let verdict = ollama.analyze_package(
+                &pkg.package_name,
+                &format!("{}", pkg.package_type),
+                &pkg.found_in_context,
+                pkg.exists_in_public_registry,
+            ).await;
+            match verdict {
+                Some(v) if !v.is_real && v.confidence >= 70 => {
+                    println!("{}", format!("  [AI] Falso positivo: {} ({})", pkg.package_name, v.reason).bright_black());
+                }
+                _ => filtered.push(pkg.clone()),
+            }
+        }
+        let removed = before_count - filtered.len();
+        if removed > 0 {
+            println!("{}", format!("[AI] Packages: {} falsos positivos removidos ({} restantes)", removed, filtered.len()).green());
+        }
+        package_dependencies = filtered;
+    }
 
     // Save package dependencies
     let packages_file = base_path.join("package_dependencies.json");
@@ -1736,6 +1991,36 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
                 }
             }
         }
+    }
+
+    // AI Filter: Validate TruffleHog secrets with Ollama
+    if ollama.is_available().await && !trufflehog_secrets.is_empty() {
+        println!("{}", "[AI] Validando TruffleHog secrets com Ollama...".cyan());
+        let before_count = trufflehog_secrets.len();
+        let mut filtered = Vec::new();
+        for secret in &trufflehog_secrets {
+            let detector = secret["DetectorName"].as_str().unwrap_or("Unknown");
+            let raw_preview = secret["Raw"].as_str().unwrap_or("").chars().take(60).collect::<String>();
+            let source = secret["SourceMetadata"]["Data"]["Filesystem"]["file"]
+                .as_str().unwrap_or("Unknown");
+            let verdict = ollama.analyze_secret(
+                detector,
+                &raw_preview,
+                &format!("TruffleHog detector: {}", detector),
+                source,
+            ).await;
+            match verdict {
+                Some(v) if !v.is_real && v.confidence >= 70 => {
+                    println!("{}", format!("  [AI] TruffleHog FP removido: {} ({})", detector, v.reason).bright_black());
+                }
+                _ => filtered.push(secret.clone()),
+            }
+        }
+        let removed = before_count - filtered.len();
+        if removed > 0 {
+            println!("{}", format!("[AI] TruffleHog: {} falsos positivos removidos ({} restantes)", removed, filtered.len()).green());
+        }
+        trufflehog_secrets = filtered;
     }
 
     // Save TruffleHog text summary
@@ -1873,7 +2158,92 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
             Some(&js_contents),
             true, // verbose
         ).await {
-            Ok(results) => {
+            Ok(mut results) => {
+                // AI Filter: Validate info disclosure findings with Ollama
+                if ollama.is_available().await && results.total_findings > 0 {
+                    println!("{}", "[AI] Validando info disclosure findings com Ollama...".cyan());
+                    let mut total_removed = 0usize;
+
+                    // Filter actuator findings
+                    if !results.actuator_findings.is_empty() {
+                        let before = results.actuator_findings.len();
+                        let mut filtered = Vec::new();
+                        for finding in &results.actuator_findings {
+                            let verdict = ollama.analyze_info_disclosure(
+                                &finding.url,
+                                &format!("Spring Actuator: {}", finding.endpoint),
+                                &finding.content_preview,
+                            ).await;
+                            match verdict {
+                                Some(v) if !v.is_real && v.confidence >= 70 => {
+                                    println!("{}", format!("  [AI] Actuator FP: {} ({})", finding.endpoint, v.reason).bright_black());
+                                }
+                                _ => filtered.push(finding.clone()),
+                            }
+                        }
+                        total_removed += before - filtered.len();
+                        results.actuator_findings = filtered;
+                    }
+
+                    // Filter sensitive file findings
+                    if !results.sensitive_files.is_empty() {
+                        let before = results.sensitive_files.len();
+                        let mut filtered = Vec::new();
+                        for finding in &results.sensitive_files {
+                            let verdict = ollama.analyze_info_disclosure(
+                                &finding.url,
+                                &format!("Sensitive File: {}", finding.file_type),
+                                &finding.content_preview,
+                            ).await;
+                            match verdict {
+                                Some(v) if !v.is_real && v.confidence >= 70 => {
+                                    println!("{}", format!("  [AI] File FP: {} ({})", finding.url, v.reason).bright_black());
+                                }
+                                _ => filtered.push(finding.clone()),
+                            }
+                        }
+                        total_removed += before - filtered.len();
+                        results.sensitive_files = filtered;
+                    }
+
+                    // Filter GraphQL findings
+                    if !results.graphql_findings.is_empty() {
+                        let before = results.graphql_findings.len();
+                        let mut filtered = Vec::new();
+                        for finding in &results.graphql_findings {
+                            let schema_info = format!("types:{} queries:{} mutations:{}",
+                                finding.types_discovered, finding.queries_discovered, finding.mutations_discovered);
+                            let verdict = ollama.analyze_info_disclosure(
+                                &finding.url,
+                                "GraphQL Introspection",
+                                &schema_info,
+                            ).await;
+                            match verdict {
+                                Some(v) if !v.is_real && v.confidence >= 70 => {
+                                    println!("{}", format!("  [AI] GraphQL FP: {} ({})", finding.url, v.reason).bright_black());
+                                }
+                                _ => filtered.push(finding.clone()),
+                            }
+                        }
+                        total_removed += before - filtered.len();
+                        results.graphql_findings = filtered;
+                    }
+
+                    if total_removed > 0 {
+                        results.total_findings = results.cloud_storage_findings.len()
+                            + results.actuator_findings.len()
+                            + results.graphql_findings.len()
+                            + results.sensitive_files.len();
+                        println!("{}", format!("[AI] Info Disclosure: {} falsos positivos removidos ({} reais)", total_removed, results.total_findings).green());
+
+                        // Re-save filtered results
+                        let results_path = base_path.join("info_disclosure_results.json");
+                        if let Ok(json) = serde_json::to_string_pretty(&results) {
+                            let _ = fs::write(&results_path, json);
+                        }
+                    }
+                }
+
                 progress.tool_completed("Info Disclosure Scanner", 92.0);
                 progress.data_found("disclosure_findings", results.total_findings, 92.0);
                 Some(results)
@@ -1925,6 +2295,50 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         ))
         .status()
         .await;
+
+    // AI Filter: Validate Nuclei findings with Ollama
+    if ollama.is_available().await && nuclei_file.exists() {
+        if let Ok(content) = fs::read_to_string(&nuclei_file) {
+            let all_lines: Vec<&str> = content.lines().collect();
+            if !all_lines.is_empty() {
+                println!("{}", "[AI] Triando vulnerabilidades Nuclei com Ollama...".cyan());
+                let before_count = all_lines.len();
+                let mut validated_lines = Vec::new();
+                for line in &all_lines {
+                    if let Ok(vuln) = serde_json::from_str::<serde_json::Value>(line) {
+                        let template_id = vuln["template-id"].as_str().unwrap_or("");
+                        let name = vuln["info"]["name"].as_str().unwrap_or("");
+                        let severity = vuln["info"]["severity"].as_str().unwrap_or("info");
+                        let matched_at = vuln["matched-at"].as_str()
+                            .or_else(|| vuln["host"].as_str())
+                            .unwrap_or("");
+                        let extracted = vuln["extracted-results"].as_str()
+                            .or_else(|| vuln["matcher-name"].as_str())
+                            .unwrap_or("");
+
+                        let verdict = ollama.analyze_nuclei_finding(
+                            template_id, name, severity, matched_at, extracted,
+                        ).await;
+                        match verdict {
+                            Some(v) if !v.is_real && v.confidence >= 75 => {
+                                println!("{}", format!("  [AI] Nuclei FP: {} - {} ({})", severity, name, v.reason).bright_black());
+                            }
+                            _ => validated_lines.push(*line),
+                        }
+                    } else {
+                        validated_lines.push(*line);
+                    }
+                }
+                let removed = before_count - validated_lines.len();
+                if removed > 0 {
+                    // Rewrite nuclei file with only validated findings
+                    let validated_content = validated_lines.join("\n");
+                    let _ = fs::write(&nuclei_file, validated_content);
+                    println!("{}", format!("[AI] Nuclei: {} falsos positivos removidos ({} vulns reais)", removed, validated_lines.len()).green());
+                }
+            }
+        }
+    }
 
     // Count and display Nuclei results
     let nuclei_count = if nuclei_file.exists() {
@@ -2036,10 +2450,16 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
                     "-d",
                     "2",
                     "-q",
-                    "--silent",
+                    "-C", "404",
+                    "--auto-tune",
+                    "--no-state",
+                    "--time-limit", "5m",
                     "-o",
                     &ferox_output.to_string_lossy(),
                 ])
+                .stdin(std::process::Stdio::null())
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
                 .status()
                 .await;
 
@@ -2057,18 +2477,129 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
             }
         }
 
-        // Aggregate all feroxbuster results
-        if let Ok(mut ferox_file) = OpenOptions::new()
-            .create(true)
-            .write(true)
-            .truncate(true)
-            .open(&ferox_access_file)
+        // Aggregate all feroxbuster results with status code filtering and size dedup
         {
+            let mut all_lines: Vec<String> = Vec::new();
+            let mut seen_sizes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
             for idx in 0..10 {
                 let ferox_output = base_path.join(format!("ferox_{}.txt", idx));
                 if ferox_output.exists() {
                     if let Ok(content) = fs::read_to_string(&ferox_output) {
-                        let _ = writeln!(ferox_file, "{}", content);
+                        for line in content.lines() {
+                            let trimmed = line.trim();
+                            if trimmed.is_empty() { continue; }
+
+                            // Parse feroxbuster output format: STATUS  METHOD  LINESl  WORDSw  SIZEc  URL
+                            // Also handles lines starting with URL directly
+                            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+                            // Try to extract status code from first field
+                            if let Some(first) = parts.first() {
+                                if let Ok(status) = first.parse::<u16>() {
+                                    // Filter: keep only useful status codes
+                                    match status {
+                                        200 | 201 | 301 | 302 | 403 => {
+                                            // Track response sizes for dedup (custom 404s have identical sizes)
+                                            // Size is typically the 5th field (e.g., "7944c")
+                                            let size_key = parts.get(4)
+                                                .map(|s| s.to_string())
+                                                .unwrap_or_default();
+                                            let count = seen_sizes.entry(size_key).or_insert(0);
+                                            *count += 1;
+                                            all_lines.push(trimmed.to_string());
+                                        }
+                                        _ => {
+                                            // Skip 404, 500, etc.
+                                            continue;
+                                        }
+                                    }
+                                } else {
+                                    // Line doesn't start with status code (URL or comment) - keep it
+                                    all_lines.push(trimmed.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dedup pass: remove lines with sizes that appear too many times (likely custom error pages)
+            let size_threshold = 5; // If >5 responses have the exact same size, likely custom 404
+            let before_dedup = all_lines.len();
+            all_lines.retain(|line| {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if let Some(size_field) = parts.get(4) {
+                    let size_key = size_field.to_string();
+                    if let Some(&count) = seen_sizes.get(&size_key) {
+                        return count <= size_threshold;
+                    }
+                }
+                true // Keep lines without parseable size
+            });
+            let dedup_removed = before_dedup - all_lines.len();
+            if dedup_removed > 0 {
+                println!("{}", format!("   🧹 Removed {} duplicate-size responses (custom error pages)", dedup_removed).yellow());
+            }
+
+            // Write filtered results
+            if let Ok(mut ferox_file) = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .open(&ferox_access_file)
+            {
+                for line in &all_lines {
+                    let _ = writeln!(ferox_file, "{}", line);
+                }
+            }
+        }
+
+        // AI Filter: Validate feroxbuster findings with Ollama
+        if ollama.is_available().await && ferox_access_file.exists() {
+            if let Ok(content) = fs::read_to_string(&ferox_access_file) {
+                let all_lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
+                if !all_lines.is_empty() {
+                    println!("{}", "[AI] Filtrando resultados do Feroxbuster com Ollama...".cyan());
+                    let before_count = all_lines.len();
+                    let mut validated_lines = Vec::new();
+                    for line in &all_lines {
+                        let parts: Vec<&str> = line.split_whitespace().collect();
+                        // Parse: STATUS METHOD LINESl WORDSw SIZEc URL
+                        let (status_code, response_size, url_str) = if parts.len() >= 6 {
+                            let sc = parts[0].parse::<u16>().unwrap_or(0);
+                            let sz = parts[4]; // e.g., "7944c"
+                            let u = parts[5]; // URL
+                            (sc, sz.to_string(), u.to_string())
+                        } else if parts.len() == 1 {
+                            // Just a URL
+                            (200, "unknown".to_string(), parts[0].to_string())
+                        } else {
+                            validated_lines.push(*line);
+                            continue;
+                        };
+
+                        // Extract path from URL
+                        let path = url_str.split("://")
+                            .nth(1)
+                            .and_then(|s| s.find('/').map(|i| &s[i..]))
+                            .unwrap_or(&url_str);
+
+                        let verdict = ollama.analyze_directory_finding(
+                            &url_str, status_code, &response_size, path,
+                        ).await;
+                        match verdict {
+                            Some(v) if !v.is_real && v.confidence >= 70 => {
+                                println!("{}", format!("  [AI] Ferox FP: {} - {} ({})", status_code, path, v.reason).bright_black());
+                            }
+                            _ => validated_lines.push(*line),
+                        }
+                    }
+                    let removed = before_count - validated_lines.len();
+                    if removed > 0 {
+                        let validated_content = validated_lines.join("\n");
+                        let _ = fs::write(&ferox_access_file, validated_content);
+                        println!("{}", format!("[AI] Feroxbuster: {} falsos positivos removidos ({} findings reais)", removed, validated_lines.len()).green());
                     }
                 }
             }
@@ -2151,6 +2682,208 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // STAGE 11.5: XPLOITER DEEP EXPLOIT ANALYSIS (Optional, if --xploiter enabled)
+    // ═══════════════════════════════════════════════════════════════════════════
+    if args.xploiter {
+        println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".red().bold());
+        println!("{}", "║  ☠  STAGE 11.5: XPLOITER DEEP EXPLOIT ANALYSIS                               ║".red().bold());
+        println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".red().bold());
+
+        progress.tool_started("Xploiter AI Analysis");
+
+        // Initialize XploiterClient (auto-pulls model if needed)
+        let xploiter = ollama::XploiterClient::new().await;
+
+        if xploiter.is_available().await {
+            let mut all_verdicts: Vec<ollama::XploiterVerdict> = Vec::new();
+            let mut all_suggestions: Vec<ollama::ExploitSuggestion> = Vec::new();
+            let mut findings_summary = String::new();
+
+            // ═══════════════════════════════════════════════════════════════
+            // PHASE 1: Individual exploitability analysis
+            // ═══════════════════════════════════════════════════════════════
+            println!("\n{}", "[XPLOITER] Phase 1: Analyzing individual findings for exploitability...".cyan().bold());
+
+            // Analyze nuclei findings (high/critical only)
+            if nuclei_file.exists() {
+                if let Ok(content) = fs::read_to_string(&nuclei_file) {
+                    let mut nuclei_analyzed = 0;
+                    for line in content.lines() {
+                        if let Ok(vuln) = serde_json::from_str::<serde_json::Value>(line) {
+                            let severity = vuln["info"]["severity"].as_str().unwrap_or("info");
+                            if severity != "critical" && severity != "high" {
+                                continue;
+                            }
+                            let name = vuln["info"]["name"].as_str().unwrap_or("Unknown");
+                            let matched_at = vuln["matched-at"].as_str()
+                                .or_else(|| vuln["host"].as_str())
+                                .unwrap_or("Unknown");
+                            let template_id = vuln["template-id"].as_str().unwrap_or("unknown");
+                            let description = vuln["info"]["description"].as_str().unwrap_or("");
+
+                            let details = format!("{} ({}) - {} at {}", name, template_id, severity, matched_at);
+                            findings_summary.push_str(&format!("- [NUCLEI/{}] {}\n", severity.to_uppercase(), details));
+
+                            if let Some(verdict) = xploiter.analyze_exploitability(
+                                &format!("Nuclei: {}", name),
+                                &details,
+                                description,
+                            ).await {
+                                let status = if verdict.exploitable { "EXPLOITABLE".red().bold() } else { "Not Exploitable".green() };
+                                println!("  [XPLOITER] {} | {} | {} (confidence: {}%)",
+                                    status, name, verdict.severity.to_uppercase(), verdict.confidence);
+                                all_verdicts.push(verdict);
+                            }
+
+                            nuclei_analyzed += 1;
+                            if nuclei_analyzed >= 20 { break; } // Limit to top 20
+                        }
+                    }
+                    println!("{}", format!("[XPLOITER] Analyzed {} nuclei findings", nuclei_analyzed).green());
+                }
+            }
+
+            // Analyze critical secrets
+            let critical_secrets: Vec<_> = enhanced_secrets.iter()
+                .filter(|s| s.severity == "CRITICAL" || s.severity == "HIGH")
+                .take(10)
+                .collect();
+
+            for secret in &critical_secrets {
+                let details = format!("{}: {} in {}", secret.secret_type, secret.secret_preview, secret.found_in_url);
+                findings_summary.push_str(&format!("- [SECRET/{}] {}\n", secret.severity, details));
+
+                if let Some(verdict) = xploiter.analyze_exploitability(
+                    &format!("Secret: {}", secret.secret_type),
+                    &details,
+                    &secret.context,
+                ).await {
+                    let status = if verdict.exploitable { "EXPLOITABLE".red().bold() } else { "Not Exploitable".green() };
+                    println!("  [XPLOITER] {} | Secret: {} (confidence: {}%)",
+                        status, secret.secret_type, verdict.confidence);
+                    all_verdicts.push(verdict);
+                }
+            }
+
+            // Analyze admin panels
+            let high_panels: Vec<_> = admin_panels.iter()
+                .filter(|p| p.is_likely_admin)
+                .take(5)
+                .collect();
+
+            for panel in &high_panels {
+                let title = panel.title.as_deref().unwrap_or("N/A");
+                let details = format!("Admin Panel: {} (title: {}, status: {})", panel.url, title, panel.status_code);
+                findings_summary.push_str(&format!("- [ADMIN] {}\n", details));
+
+                if let Some(verdict) = xploiter.analyze_exploitability(
+                    "Admin Panel Access",
+                    &details,
+                    &format!("Fingerprints: {}", panel.fingerprint.join(", ")),
+                ).await {
+                    let status = if verdict.exploitable { "EXPLOITABLE".red().bold() } else { "Not Exploitable".green() };
+                    println!("  [XPLOITER] {} | Admin: {} (confidence: {}%)",
+                        status, panel.url, verdict.confidence);
+                    all_verdicts.push(verdict);
+                }
+            }
+
+            let exploitable_count = all_verdicts.iter().filter(|v| v.exploitable).count();
+            println!("\n{}", format!("[XPLOITER] Phase 1 complete: {}/{} findings exploitable",
+                exploitable_count, all_verdicts.len()).cyan().bold());
+
+            // ═══════════════════════════════════════════════════════════════
+            // PHASE 2: Attack chain generation
+            // ═══════════════════════════════════════════════════════════════
+            println!("\n{}", "[XPLOITER] Phase 2: Generating attack chains...".cyan().bold());
+
+            // Add attack surface context
+            findings_summary.push_str(&format!("\nAttack Surface: {} subdomains, {} live hosts, {} open URLs\n",
+                total_subdomains, http200_urls.len(), http200_urls.len()));
+
+            let attack_chains = if !findings_summary.is_empty() {
+                xploiter.generate_attack_chains(&findings_summary).await.unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+
+            for chain in &attack_chains {
+                println!("  [XPLOITER] Chain: {} | Severity: {} | Steps: {} | Confidence: {}%",
+                    chain.chain_name, chain.overall_severity.to_uppercase(),
+                    chain.steps.len(), chain.confidence);
+            }
+            println!("{}", format!("[XPLOITER] Generated {} attack chains", attack_chains.len()).green());
+
+            // ═══════════════════════════════════════════════════════════════
+            // PHASE 3: Exploit payload suggestions
+            // ═══════════════════════════════════════════════════════════════
+            println!("\n{}", "[XPLOITER] Phase 3: Generating exploit suggestions...".cyan().bold());
+
+            // Get suggestions for top exploitable findings
+            for verdict in all_verdicts.iter().filter(|v| v.exploitable && v.confidence >= 70).take(5) {
+                if let Some(suggestions) = xploiter.suggest_exploit_payloads(
+                    &verdict.attack_vector,
+                    &verdict.impact,
+                    &verdict.remediation,
+                ).await {
+                    for s in &suggestions {
+                        println!("  [XPLOITER] Payload: {} [{}]", s.technique, s.risk_level);
+                    }
+                    all_suggestions.extend(suggestions);
+                }
+            }
+            println!("{}", format!("[XPLOITER] Generated {} exploit suggestions", all_suggestions.len()).green());
+
+            // ═══════════════════════════════════════════════════════════════
+            // PHASE 4: Offensive report generation
+            // ═══════════════════════════════════════════════════════════════
+            println!("\n{}", "[XPLOITER] Phase 4: Generating offensive report...".cyan().bold());
+
+            let offensive_report = xploiter.generate_offensive_report(domain, &findings_summary)
+                .await
+                .unwrap_or_else(|| "No offensive report generated - insufficient findings.".to_string());
+
+            // ═══════════════════════════════════════════════════════════════
+            // Save results
+            // ═══════════════════════════════════════════════════════════════
+            let analysis = ollama::XploiterAnalysis {
+                domain: domain.to_string(),
+                verdicts: all_verdicts.clone(),
+                attack_chains: attack_chains.clone(),
+                exploit_suggestions: all_suggestions.clone(),
+                offensive_report: offensive_report.clone(),
+            };
+
+            // Save JSON analysis
+            let xploiter_json_file = base_path.join("xploiter_analysis.json");
+            if let Ok(json) = serde_json::to_string_pretty(&analysis) {
+                let _ = fs::write(&xploiter_json_file, &json);
+                println!("{}", format!("[XPLOITER] Analysis saved: {}", xploiter_json_file.display()).green());
+            }
+
+            // Save offensive report as text
+            let xploiter_report_file = base_path.join("xploiter_report.txt");
+            let _ = fs::write(&xploiter_report_file, &offensive_report);
+            println!("{}", format!("[XPLOITER] Report saved: {}", xploiter_report_file.display()).green());
+
+            // Print summary
+            println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".red().bold());
+            println!("{}", "║  ☠  XPLOITER ANALYSIS SUMMARY                                                ║".red().bold());
+            println!("{}", "╠═══════════════════════════════════════════════════════════════════════════════╣".red());
+            println!("{}", format!("║  Findings Analyzed: {:>4}                                                     ║", all_verdicts.len()).red());
+            println!("{}", format!("║  Exploitable:       {:>4}                                                     ║", exploitable_count).red());
+            println!("{}", format!("║  Attack Chains:     {:>4}                                                     ║", attack_chains.len()).red());
+            println!("{}", format!("║  Exploit Payloads:  {:>4}                                                     ║", all_suggestions.len()).red());
+            println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".red().bold());
+
+            progress.tool_completed("Xploiter AI Analysis", 100.0);
+        } else {
+            println!("{}", "[XPLOITER] Xploiter AI nao disponivel - pulando analise".yellow());
+            progress.tool_completed("Xploiter AI Analysis", 100.0);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // STAGE 12: LOGIN BRUTEFORCE (Optional, if enabled)
     // ═══════════════════════════════════════════════════════════════════════════
     if args.bruteforce {
@@ -2186,13 +2919,41 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
                 println!("{}", format!("[*] Starting bruteforce attack on {} login forms...", login_forms.len()).cyan());
                 println!("{}", format!("    Rate limit: {}ms between requests", config.rate_limit_ms).cyan());
 
-                let valid_credentials = bruteforce::bruteforce_logins(
+                let mut valid_credentials = bruteforce::bruteforce_logins(
                     &login_forms,
                     userlist,
                     passlist,
                     &client,
                     &config,
                 ).await;
+
+                // AI Filter: Validate bruteforce results with Ollama
+                if ollama.is_available().await && !valid_credentials.is_empty() {
+                    println!("{}", "[AI] Validando credenciais bruteforce com Ollama...".cyan());
+                    let before_count = valid_credentials.len();
+                    let mut filtered = Vec::new();
+                    for cred in &valid_credentials {
+                        let indicators = cred.success_indicators.join(", ");
+                        let verdict = ollama.analyze_credential_result(
+                            &cred.url,
+                            &cred.username,
+                            "",
+                            &indicators,
+                            cred.response_status,
+                        ).await;
+                        match verdict {
+                            Some(v) if !v.is_real && v.confidence >= 75 => {
+                                println!("{}", format!("  [AI] Bruteforce FP: {}:{} em {} ({})", cred.username, cred.password, cred.url, v.reason).bright_black());
+                            }
+                            _ => filtered.push(cred.clone()),
+                        }
+                    }
+                    let removed = before_count - filtered.len();
+                    if removed > 0 {
+                        println!("{}", format!("[AI] Bruteforce: {} falsos positivos removidos ({} validas)", removed, filtered.len()).green());
+                    }
+                    valid_credentials = filtered;
+                }
 
                 // Save valid credentials
                 if !valid_credentials.is_empty() {
@@ -2242,6 +3003,40 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     )?;
 
     println!("{}", format!("[+] Consolidated report: {}", all_results_file.display()).green().bold());
+
+    // AI: Generate executive summary with Ollama
+    if ollama.is_available().await {
+        println!("{}", "[AI] Gerando executive summary com Ollama...".cyan());
+        let mut critical_findings = Vec::new();
+        for secret in enhanced_secrets.iter().filter(|s| s.severity == "CRITICAL").take(5) {
+            critical_findings.push(format!("{}: {} em {}", secret.secret_type, secret.secret_preview, secret.found_in_url));
+        }
+        for panel in admin_panels.iter().filter(|p| p.is_likely_admin).take(3) {
+            critical_findings.push(format!("Admin Panel: {} ({})", panel.url, panel.title.as_deref().unwrap_or("N/A")));
+        }
+
+        if let Some(summary) = ollama.generate_executive_summary(
+            domain,
+            total_subdomains,
+            http200_urls.len(),
+            enhanced_secrets.len() + trufflehog_secrets.len(),
+            nuclei_count,
+            admin_panels.len(),
+            &critical_findings,
+        ).await {
+            let summary_file = base_path.join("ai_executive_summary.txt");
+            let _ = fs::write(&summary_file, &summary);
+            println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".magenta().bold());
+            println!("{}", "║  🤖 AI EXECUTIVE SUMMARY                                                      ║".magenta().bold());
+            println!("{}", "╠═══════════════════════════════════════════════════════════════════════════════╣".magenta());
+            for line in summary.lines().take(12) {
+                let padded = format!("║  {}{}║", line, " ".repeat(75_usize.saturating_sub(line.len())));
+                println!("{}", padded.magenta());
+            }
+            println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".magenta().bold());
+            println!("{}", format!("[AI] Summary salvo em: {}", summary_file.display()).green());
+        }
+    }
 
     // Finalize metrics
     metrics.finalize();

@@ -33,6 +33,7 @@ pub fn generate_html_report(scan_dir: &Path, domain: &str) -> Result<String> {
     let s3_buckets = read_file_lines(&scan_dir.join("s3.txt"));
     let validated_hosts = read_json_file(&scan_dir.join("validated_hosts.json"));
     let metrics = read_json_file(&scan_dir.join("scan_metrics.json"));
+    let xploiter = read_json_file(&scan_dir.join("xploiter_analysis.json"));
 
     let html_content = generate_html_content(
         domain,
@@ -48,6 +49,7 @@ pub fn generate_html_report(scan_dir: &Path, domain: &str) -> Result<String> {
         &s3_buckets,
         &validated_hosts,
         &metrics,
+        &xploiter,
     );
 
     fs::write(&html_path, html_content)?;
@@ -118,6 +120,7 @@ fn generate_html_content(
     s3_buckets: &[String],
     validated_hosts: &[Value],
     metrics: &[Value],
+    xploiter: &[Value],
 ) -> String {
     // Count vulnerabilities by severity for executive summary
     let (critical_count, high_count, medium_count, low_count) = count_vuln_severities(nuclei);
@@ -151,6 +154,7 @@ fn generate_html_content(
     let endpoints_html = generate_endpoints_tab(js_endpoints);
     let packages_html = generate_packages_tab(packages);
     let poc_html = generate_poc_tab();
+    let xploiter_html = generate_xploiter_tab(xploiter);
     let raw_data_html = generate_raw_data_tab(metrics);
 
     let current_date = chrono::Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
@@ -1369,6 +1373,11 @@ fn generate_html_content(
                     <span class="nav-icon">&#128187;</span>
                     POC Editor
                 </div>
+                <div class="nav-item" onclick="openTab('xploiter')">
+                    <span class="nav-icon">&#9760;</span>
+                    Xploiter AI
+                    {xploiter_badge}
+                </div>
                 <div class="nav-item" onclick="openTab('raw')">
                     <span class="nav-icon">&#128196;</span>
                     Raw Data
@@ -1435,6 +1444,7 @@ fn generate_html_content(
             {endpoints_html}
             {packages_html}
             {poc_html}
+            {xploiter_html}
             {raw_data_html}
         </main>
     </div>
@@ -1568,6 +1578,20 @@ fn generate_html_content(
         endpoints_html = endpoints_html,
         packages_html = packages_html,
         poc_html = poc_html,
+        xploiter_html = xploiter_html,
+        xploiter_badge = if !xploiter.is_empty() {
+            let xploiter_count = xploiter.first()
+                .and_then(|x| x["verdicts"].as_array())
+                .map(|v| v.iter().filter(|e| e["exploitable"].as_bool().unwrap_or(false)).count())
+                .unwrap_or(0);
+            if xploiter_count > 0 {
+                format!(r#"<span class="nav-badge critical">{}</span>"#, xploiter_count)
+            } else {
+                String::new()
+            }
+        } else {
+            String::new()
+        },
         raw_data_html = raw_data_html,
         total_subdomains = subdomains.len(),
         total_live_hosts = http200_urls.len(),
@@ -2347,6 +2371,265 @@ fn generate_poc_tab() -> String {
             </div>
         </div>
     </div>"#)
+}
+
+fn generate_xploiter_tab(xploiter: &[Value]) -> String {
+    let mut html = String::from(r#"<div id="xploiter" class="tab-content">"#);
+
+    if xploiter.is_empty() {
+        html.push_str(r#"<div class="card">
+            <div class="card-header">
+                <div class="card-title">
+                    <span class="card-title-icon">&#9760;</span>
+                    Xploiter AI Analysis
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="empty-state">
+                    <div class="empty-state-icon">&#9760;</div>
+                    <div class="empty-state-title">Xploiter Analysis Not Available</div>
+                    <div class="empty-state-desc">Run with --xploiter flag to enable deep exploit analysis.</div>
+                </div>
+            </div>
+        </div>"#);
+        html.push_str("</div>");
+        return html;
+    }
+
+    let analysis = &xploiter[0];
+
+    // ═══════════════════════════════════════════════════════════════
+    // Exploitability Verdicts
+    // ═══════════════════════════════════════════════════════════════
+    let verdicts = analysis["verdicts"].as_array();
+    let exploitable_count = verdicts.map(|v| v.iter()
+        .filter(|e| e["exploitable"].as_bool().unwrap_or(false)).count())
+        .unwrap_or(0);
+    let total_verdicts = verdicts.map(|v| v.len()).unwrap_or(0);
+
+    html.push_str(r#"<div class="card">
+        <div class="card-header">
+            <div class="card-title">
+                <span class="card-title-icon">&#9760;</span>
+                Exploitability Analysis
+            </div>
+            <span class="card-badge" style="background: rgba(239, 68, 68, 0.2); color: var(--accent-red);">"#);
+    html.push_str(&format!("{}/{} exploitable</span>", exploitable_count, total_verdicts));
+    html.push_str(r#"</div>
+        <div class="card-body">"#);
+
+    if let Some(verdicts) = verdicts {
+        for verdict in verdicts {
+            let exploitable = verdict["exploitable"].as_bool().unwrap_or(false);
+            let severity = verdict["severity"].as_str().unwrap_or("medium");
+            let attack_vector = verdict["attack_vector"].as_str().unwrap_or("N/A");
+            let impact = verdict["impact"].as_str().unwrap_or("N/A");
+            let confidence = verdict["confidence"].as_u64().unwrap_or(0);
+            let cvss = verdict["cvss_estimate"].as_f64();
+            let remediation = verdict["remediation"].as_str().unwrap_or("N/A");
+
+            let border_color = if exploitable { "var(--accent-red)" } else { "var(--accent-green)" };
+            let status_text = if exploitable { "EXPLOITABLE" } else { "NOT EXPLOITABLE" };
+            let status_bg = if exploitable { "var(--accent-red)" } else { "var(--accent-green)" };
+
+            html.push_str(&format!(
+                r#"<div class="vuln-card" style="border-left: 4px solid {}; margin-bottom: 1rem;">
+                    <div class="vuln-card-header">
+                        <span class="vuln-severity {}">{}</span>
+                        <span style="background: {}; color: white; padding: 0.25rem 0.75rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700;">{}</span>
+                        <div class="vuln-info" style="flex: 1;">
+                            <div class="vuln-name">{}</div>
+                            <div style="font-size: 0.8rem; color: var(--text-muted);">Confidence: {}%{}</div>
+                        </div>
+                    </div>
+                    <div class="vuln-card-body">
+                        <div style="margin-bottom: 0.75rem;">
+                            <strong style="color: var(--text-muted); font-size: 0.8rem;">IMPACT:</strong>
+                            <div style="color: var(--text-secondary); font-size: 0.9rem;">{}</div>
+                        </div>
+                        <details class="vuln-details">
+                            <summary>Remediation</summary>
+                            <div style="padding: 0.75rem; background: var(--bg-dark); border-radius: 6px; margin-top: 0.5rem; font-size: 0.85rem; color: var(--accent-green);">{}</div>
+                        </details>
+                    </div>
+                </div>"#,
+                border_color,
+                severity, severity.to_uppercase(),
+                status_bg, status_text,
+                attack_vector,
+                confidence,
+                cvss.map(|c| format!(" | CVSS: {:.1}", c)).unwrap_or_default(),
+                impact,
+                remediation
+            ));
+        }
+    }
+
+    html.push_str("</div></div>");
+
+    // ═══════════════════════════════════════════════════════════════
+    // Attack Chains
+    // ═══════════════════════════════════════════════════════════════
+    if let Some(chains) = analysis["attack_chains"].as_array() {
+        if !chains.is_empty() {
+            html.push_str(r#"<div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="card-title-icon">&#128279;</span>
+                        Attack Chains
+                    </div>
+                    <span class="card-badge">"#);
+            html.push_str(&format!("{} chains</span>", chains.len()));
+            html.push_str(r#"</div>
+                <div class="card-body">"#);
+
+            for (idx, chain) in chains.iter().enumerate() {
+                let name = chain["chain_name"].as_str().unwrap_or("Unknown Chain");
+                let severity = chain["overall_severity"].as_str().unwrap_or("medium");
+                let impact = chain["overall_impact"].as_str().unwrap_or("N/A");
+                let confidence = chain["confidence"].as_u64().unwrap_or(0);
+                let steps = chain["steps"].as_array();
+                let findings = chain["findings_used"].as_array();
+
+                html.push_str(&format!(
+                    r#"<div class="vuln-card" style="margin-bottom: 1rem;">
+                        <div class="vuln-card-header">
+                            <span class="vuln-severity {}">{}</span>
+                            <div class="vuln-info">
+                                <div class="vuln-name">Chain #{}: {}</div>
+                                <div style="font-size: 0.8rem; color: var(--text-muted);">Confidence: {}%</div>
+                            </div>
+                        </div>
+                        <div class="vuln-card-body">
+                            <div style="margin-bottom: 1rem;">
+                                <strong style="color: var(--text-muted); font-size: 0.8rem;">IMPACT:</strong>
+                                <div style="color: var(--text-secondary);">{}</div>
+                            </div>"#,
+                    severity, severity.to_uppercase(),
+                    idx + 1, name,
+                    confidence,
+                    impact
+                ));
+
+                // Steps
+                if let Some(steps) = steps {
+                    html.push_str(r#"<div style="margin-bottom: 1rem;">"#);
+                    html.push_str(r#"<strong style="color: var(--text-muted); font-size: 0.8rem;">ATTACK STEPS:</strong>"#);
+                    for (i, step) in steps.iter().enumerate() {
+                        let step_text = step.as_str().unwrap_or("...");
+                        html.push_str(&format!(
+                            r#"<div style="display: flex; align-items: flex-start; gap: 0.75rem; padding: 0.5rem 0; border-bottom: 1px solid var(--border-color);">
+                                <span style="background: var(--accent-red); color: white; min-width: 24px; height: 24px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 0.75rem; font-weight: 700;">{}</span>
+                                <span style="color: var(--text-secondary); font-size: 0.9rem;">{}</span>
+                            </div>"#,
+                            i + 1, step_text
+                        ));
+                    }
+                    html.push_str("</div>");
+                }
+
+                // Findings used
+                if let Some(findings) = findings {
+                    if !findings.is_empty() {
+                        html.push_str(r#"<div class="vuln-tags">"#);
+                        for f in findings {
+                            let f_text = f.as_str().unwrap_or("unknown");
+                            html.push_str(&format!(r#"<span class="vuln-tag">{}</span>"#, f_text));
+                        }
+                        html.push_str("</div>");
+                    }
+                }
+
+                html.push_str("</div></div>");
+            }
+
+            html.push_str("</div></div>");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Exploit Suggestions
+    // ═══════════════════════════════════════════════════════════════
+    if let Some(suggestions) = analysis["exploit_suggestions"].as_array() {
+        if !suggestions.is_empty() {
+            html.push_str(r#"<div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="card-title-icon">&#128296;</span>
+                        Exploit Suggestions
+                    </div>
+                    <span class="card-badge">"#);
+            html.push_str(&format!("{} payloads</span>", suggestions.len()));
+            html.push_str(r#"</div>
+                <div class="card-body">"#);
+
+            for suggestion in suggestions {
+                let technique = suggestion["technique"].as_str().unwrap_or("N/A");
+                let payload = suggestion["payload"].as_str().unwrap_or("N/A");
+                let description = suggestion["description"].as_str().unwrap_or("");
+                let risk_level = suggestion["risk_level"].as_str().unwrap_or("moderate");
+
+                let risk_color = match risk_level {
+                    "safe" => "var(--accent-green)",
+                    "destructive" => "var(--accent-red)",
+                    _ => "var(--accent-yellow)",
+                };
+
+                // Escape HTML in payload
+                let payload_escaped = payload
+                    .replace('&', "&amp;")
+                    .replace('<', "&lt;")
+                    .replace('>', "&gt;");
+
+                html.push_str(&format!(
+                    r#"<div style="background: var(--bg-dark); border: 1px solid var(--border-color); border-radius: 8px; padding: 1rem; margin-bottom: 1rem;">
+                        <div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.75rem;">
+                            <strong style="color: var(--text-primary); font-size: 0.95rem;">{}</strong>
+                            <span style="background: {}; color: white; padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 600;">{}</span>
+                        </div>
+                        <div style="color: var(--text-secondary); font-size: 0.85rem; margin-bottom: 0.75rem;">{}</div>
+                        <pre style="margin: 0; padding: 0.75rem; background: #0a0f1a; border-radius: 6px; position: relative;"><code style="color: var(--accent-green); font-size: 0.8rem; white-space: pre-wrap; word-break: break-all;">{}</code></pre>
+                    </div>"#,
+                    technique,
+                    risk_color, risk_level.to_uppercase(),
+                    description,
+                    payload_escaped
+                ));
+            }
+
+            html.push_str("</div></div>");
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Offensive Report
+    // ═══════════════════════════════════════════════════════════════
+    if let Some(report) = analysis["offensive_report"].as_str() {
+        if !report.is_empty() && report != "No offensive report generated - insufficient findings." {
+            let report_escaped = report
+                .replace('&', "&amp;")
+                .replace('<', "&lt;")
+                .replace('>', "&gt;")
+                .replace('\n', "<br>");
+
+            html.push_str(r#"<div class="card">
+                <div class="card-header">
+                    <div class="card-title">
+                        <span class="card-title-icon">&#128221;</span>
+                        Offensive Security Report
+                    </div>
+                </div>
+                <div class="card-body">"#);
+            html.push_str(&format!(
+                r#"<div style="color: var(--text-secondary); line-height: 1.8; font-size: 0.9rem;">{}</div>"#,
+                report_escaped
+            ));
+            html.push_str("</div></div>");
+        }
+    }
+
+    html.push_str("</div>");
+    html
 }
 
 fn generate_raw_data_tab(metrics: &[Value]) -> String {

