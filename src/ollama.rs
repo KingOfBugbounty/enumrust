@@ -1,7 +1,7 @@
 // ollama.rs - AI-Powered False Positive Filtering via Ollama
 // Purpose: Integrate local LLM (Ollama) for intelligent analysis across all scan modules
 // Architecture: Auto-installs, auto-starts, auto-pulls model - zero user setup required
-// Env vars: OLLAMA_URL (default: http://localhost:11434), OLLAMA_MODEL (default: qwen2.5-coder:7b)
+// Env vars: OLLAMA_URL (default: http://localhost:11434), OLLAMA_MODEL (default: qwen2.5-coder:32b)
 
 use colored::*;
 use reqwest::Client;
@@ -56,7 +56,7 @@ impl OllamaClient {
         let base_url = std::env::var("OLLAMA_URL")
             .unwrap_or_else(|_| "http://localhost:11434".to_string());
         let model = std::env::var("OLLAMA_MODEL")
-            .unwrap_or_else(|_| "qwen2.5-coder:7b".to_string());
+            .unwrap_or_else(|_| "qwen2.5-coder:32b".to_string());
 
         let client = Client::builder()
             .timeout(Duration::from_secs(120))
@@ -214,7 +214,7 @@ impl OllamaClient {
             if let Some(models) = json["models"].as_array() {
                 return models.iter().any(|m| {
                     let name = m["name"].as_str().unwrap_or("");
-                    // Match "qwen2.5-coder:7b" against "qwen2.5-coder:7b" etc.
+                    // Match "qwen2.5-coder:32b" against "qwen2.5-coder:32b" etc.
                     name == model || name.starts_with(&format!("{}:", model))
                 });
             }
