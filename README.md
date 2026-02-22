@@ -112,7 +112,26 @@
 
 ## 🚀 Quick Start
 
-### 1. Installation
+### 1. One-Line Auto Install (Recommended)
+
+```bash
+git clone https://github.com/KingOfBugbounty/enumrust.git && cd enumrust && sudo bash install.sh
+```
+
+This will automatically:
+- Install Rust and Go toolchains (if missing)
+- Build `enumrust` and copy to `/usr/local/bin/`
+- Install all 21 security tools (httpx, nuclei, shortscan, etc.)
+- Configure PATH in `.bashrc`, `.zshrc`, `.profile`
+- Update Nuclei templates
+
+After install, open a new terminal or run `source ~/.bashrc`, then:
+```bash
+enumrust --check-tools       # verify all tools
+enumrust -d target.com       # start scanning
+```
+
+### 1b. Manual Build (Alternative)
 
 ```bash
 # Clone repository
@@ -121,6 +140,9 @@ cd enumrust
 
 # Build release version
 cargo build --release
+
+# Install tools
+./target/release/enumrust --install-tools
 ```
 
 ### 2. Basic Scan
