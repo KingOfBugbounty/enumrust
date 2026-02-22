@@ -38,7 +38,39 @@
 
 ---
 
-## 🆕 Recent Improvements (v2.3.0)
+## 🆕 What's New
+
+### IIS Short Filename Scanner (Shortscan)
+- **Auto IIS Detection** - Automatically detects Microsoft IIS servers via `Server` header during scans
+- **8.3 Filename Bruteforce** - Exploits the Windows tilde (`~`) vulnerability to discover hidden files and directories
+- **[shortscan](https://github.com/bitquark/shortscan) Integration** - Runs as STAGE 7.7 against up to 10 IIS targets
+- **JSON Output** - Results saved to `shortscan_results.json` with structured findings
+- **Skip Flag** - Use `--no-shortscan` to disable IIS scanning
+- **Install** - `go install github.com/bitquark/shortscan/cmd/shortscan@latest`
+
+### WordPress Vulnerability Scanner (WPScan)
+- **Auto WordPress Detection** - Identifies WordPress sites from admin panels, `/wp-content/`, `/wp-json/`, etc.
+- **Docker-based WPScan** - Runs `wpscanteam/wpscan` via Docker for deep vulnerability analysis
+- **Plugin & Theme Enumeration** - Detects vulnerable plugins, outdated themes, and exposed users
+- **AI False Positive Filter** - Ollama validates WPScan findings and removes false positives
+- **API Token Support** - Use `--wpscan-token` for enhanced vulnerability database access
+- **Skip Flag** - Use `--no-wpscan` to disable WordPress scanning
+
+### Ollama AI Integration
+- **Auto-Detection** - Silently detects Ollama at `localhost:11434` on scan start
+- **All-Stage Filtering** - AI validates secrets, nuclei findings, admin panels, credentials, and more
+- **Executive Summary** - Generates `ai_executive_summary.txt` with AI-powered analysis
+- **Response Caching** - Up to 5000 cached entries to avoid redundant queries
+- **Custom Model** - Configure via `OLLAMA_MODEL` env var (default: `qwen2.5-coder:32b`)
+
+### Enhanced HTML Report Generator
+- **Interactive Dashboard** - Full HTML report with charts, filtering, and severity breakdown
+- **All Findings Integrated** - Secrets, vulnerabilities, admin panels, WordPress, IIS findings in one report
+- **Export Ready** - Professional format suitable for bug bounty submissions
+
+---
+
+## Recent Improvements (v2.3.0)
 
 ### Advanced Secrets Scanner
 - **70+ Token Patterns** - GitHub (PAT, OAuth, App), AWS, GCP, Azure, Vercel, Stripe, Twilio, SendGrid, Slack, Discord, and more
@@ -130,13 +162,13 @@ cargo build --release
 
 ## 🐳 Docker Installation
 
-Run EnumRust with **all 19 tools pre-installed** using Docker - zero configuration required.
+Run EnumRust with **all 21 tools pre-installed** using Docker - zero configuration required.
 
 ```bash
 # Build
 docker build -t enumrust .
 
-# Verify all 19 tools
+# Verify all 21 tools
 docker run --rm enumrust --check-tools
 
 # Run a scan
@@ -261,7 +293,11 @@ example.com/
 ├── js_secrets.txt          # Potential secrets in JS
 ├── s3.txt                  # S3 bucket URLs
 ├── ferox_200_only.txt      # Directory bruteforce results
+├── wpscan_results.json     # WordPress vulnerability findings
+├── shortscan_results.json  # IIS short filename findings
+├── ai_executive_summary.txt # AI-generated executive summary
 ├── all_results.txt         # Consolidated report
+├── report.html             # Interactive HTML report
 ├── current_status.json     # Scan status
 ├── progress.jsonl          # Real-time progress log
 └── metrics.json            # Performance metrics
@@ -339,6 +375,8 @@ Example output:
 | katana | Crawling | Fast web crawler |
 | gau | Crawling | Fetch URLs from web archives |
 | waybackurls | Crawling | Fetch URLs from Wayback Machine |
+| shortscan | IIS | IIS short filename (8.3) scanner |
+| docker | WPScan | WordPress vulnerability scanner (via Docker) |
 
 ### Manual Installation (Alternative)
 
@@ -374,6 +412,12 @@ go install -v github.com/tomnomnom/waybackurls@latest
 go install -v github.com/tomnomnom/anew@latest
 go install -v github.com/trufflesecurity/trufflehog/v3@latest
 apt-get install -y jq whois tmux
+
+# IIS Scanner
+go install github.com/bitquark/shortscan/cmd/shortscan@latest
+
+# WordPress Scanner (Docker-based)
+curl -fsSL https://get.docker.com | sh && docker pull wpscanteam/wpscan
 
 # Add Go binaries to PATH
 echo 'export PATH="$PATH:$HOME/go/bin"' >> ~/.bashrc
