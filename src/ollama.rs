@@ -619,6 +619,46 @@ Respond ONLY with JSON: {{"real": true/false, "confidence": 0-100, "reason": "br
         self.query(&prompt).await
     }
 
+    /// Analyze a WPScan vulnerability finding for false positive filtering
+    pub async fn analyze_wpscan_finding(
+        &self,
+        component: &str,
+        version: &str,
+        vuln_title: &str,
+        severity: &str,
+        cve: &str,
+        fixed_in: &str,
+        target_url: &str,
+    ) -> Option<OllamaVerdict> {
+        let prompt = format!(
+            r#"You are a security expert triaging WordPress vulnerability scan results from WPScan.
+
+Analyze this finding and determine if it's a REAL exploitable vulnerability or a FALSE POSITIVE.
+
+Target: {}
+Component: {} (version: {})
+Vulnerability: {}
+Severity: {}
+CVE: {}
+Fixed in: {}
+
+Common false positives in WPScan:
+- Vulnerabilities already patched in the installed version
+- Plugin/theme detected but vulnerability requires authenticated access that isn't available
+- Informational findings reported as vulnerabilities (readme.txt exposure, version detection)
+- Vulnerabilities in features that are disabled or not in use
+- WordPress core version flagged but running security-patched distro (Debian/Ubuntu backports)
+- Duplicate CVEs for the same underlying issue
+
+REAL vulnerabilities: unpatched CVEs affecting the detected version, RCE/SQLi/auth bypass in active plugins, known exploited vulnerabilities with public PoCs.
+
+Respond ONLY with JSON: {{"real": true/false, "confidence": 0-100, "reason": "brief explanation"}}"#,
+            target_url, component, version, vuln_title, severity, cve, fixed_in
+        );
+
+        self.query(&prompt).await
+    }
+
     /// Analyze a Supabase key finding and exploitation results
     pub async fn analyze_supabase_finding(
         &self,

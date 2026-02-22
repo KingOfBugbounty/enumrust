@@ -33,6 +33,7 @@ pub fn generate_html_report(scan_dir: &Path, domain: &str) -> Result<String> {
     let s3_buckets = read_file_lines(&scan_dir.join("s3.txt"));
     let validated_hosts = read_json_file(&scan_dir.join("validated_hosts.json"));
     let metrics = read_json_file(&scan_dir.join("scan_metrics.json"));
+    let wpscan_results = read_json_file(&scan_dir.join("wpscan_results.json"));
     let html_content = generate_html_content(
         domain,
         &subdomains,
@@ -47,6 +48,7 @@ pub fn generate_html_report(scan_dir: &Path, domain: &str) -> Result<String> {
         &s3_buckets,
         &validated_hosts,
         &metrics,
+        &wpscan_results,
     );
 
     fs::write(&html_path, html_content)?;
@@ -117,6 +119,7 @@ fn generate_html_content(
     s3_buckets: &[String],
     validated_hosts: &[Value],
     metrics: &[Value],
+    wpscan_results: &[Value],
 ) -> String {
     // Count vulnerabilities by severity for executive summary
     let (critical_count, high_count, medium_count, low_count) = count_vuln_severities(nuclei);
@@ -149,6 +152,7 @@ fn generate_html_content(
     let cloud_html = generate_cloud_tab(cloud_storage, s3_buckets);
     let endpoints_html = generate_endpoints_tab(js_endpoints);
     let packages_html = generate_packages_tab(packages);
+    let wordpress_html = generate_wpscan_tab(wpscan_results);
     let poc_html = generate_poc_tab();
     let raw_data_html = generate_raw_data_tab(metrics);
 
@@ -1348,6 +1352,11 @@ fn generate_html_content(
                     Secrets
                     <span class="nav-badge warning">{total_secrets}</span>
                 </div>
+                <div class="nav-item" onclick="openTab('wordpress')">
+                    <span class="nav-icon">&#128271;</span>
+                    WordPress
+                    <span class="nav-badge{wp_badge_class}">{total_wp_vulns}</span>
+                </div>
 
                 <div class="nav-title" style="margin-top: 1rem;">Resources</div>
                 <div class="nav-item" onclick="openTab('cloud')">
@@ -1433,6 +1442,7 @@ fn generate_html_content(
             {cloud_html}
             {endpoints_html}
             {packages_html}
+            {wordpress_html}
             {poc_html}
             {raw_data_html}
         </main>
@@ -1566,12 +1576,15 @@ fn generate_html_content(
         cloud_html = cloud_html,
         endpoints_html = endpoints_html,
         packages_html = packages_html,
+        wordpress_html = wordpress_html,
         poc_html = poc_html,
         raw_data_html = raw_data_html,
         total_subdomains = subdomains.len(),
         total_live_hosts = http200_urls.len(),
         total_secrets = total_secrets,
         total_vulns = nuclei.len(),
+        total_wp_vulns = count_wp_vulns(wpscan_results),
+        wp_badge_class = if count_wp_vulns(wpscan_results) > 0 { " critical" } else { "" },
         current_date = current_date,
     )
 }
@@ -2346,6 +2359,292 @@ fn generate_poc_tab() -> String {
             </div>
         </div>
     </div>"#)
+}
+
+/// Count total WordPress vulnerabilities from wpscan results JSON
+fn count_wp_vulns(wpscan_results: &[Value]) -> usize {
+    let mut count = 0;
+    for result in wpscan_results {
+        if let Some(total) = result.get("total_vulnerabilities").and_then(|v| v.as_u64()) {
+            count += total as usize;
+        }
+    }
+    count
+}
+
+/// Generate WordPress security tab
+fn generate_wpscan_tab(wpscan_results: &[Value]) -> String {
+    let total_vulns = count_wp_vulns(wpscan_results);
+
+    let mut html = String::from(r#"<div id="wordpress" class="tab-content">
+        <div class="card">
+            <div class="card-header">
+                <div class="card-title">
+                    <span class="card-title-icon">&#128271;</span>
+                    WordPress Security Analysis
+                </div>
+                <span class="card-badge" style="background: rgba(168, 85, 247, 0.2); color: var(--accent-purple);">"#);
+
+    html.push_str(&format!("{} vulnerabilities</span>", total_vulns));
+    html.push_str(r#"</div>
+            <div class="card-body">"#);
+
+    if wpscan_results.is_empty() {
+        html.push_str(r#"<div class="empty-state">
+                        <div class="empty-state-icon">&#128271;</div>
+                        <div class="empty-state-title">No WordPress Sites Detected</div>
+                        <div class="empty-state-desc">No WordPress installations were found during the scan, or WPScan was not available.</div>
+                    </div>"#);
+    } else {
+        for result in wpscan_results {
+            let target_url = result["target_url"].as_str().unwrap_or("Unknown");
+
+            // Target header
+            html.push_str(&format!(
+                r#"<div style="background: var(--bg-dark); padding: 1rem; border-radius: 8px; border: 1px solid var(--border-color); margin-bottom: 1.5rem;">
+                    <div style="font-size: 1rem; font-weight: 600; color: var(--accent-purple); margin-bottom: 0.5rem;">&#128271; {}</div>"#,
+                target_url
+            ));
+
+            // WordPress version
+            if let Some(version) = result.get("wordpress_version") {
+                if !version.is_null() {
+                    let number = version["number"].as_str().unwrap_or("Unknown");
+                    let status = version["status"].as_str().unwrap_or("unknown");
+                    let (status_bg, status_color) = match status {
+                        "insecure" => ("rgba(239, 68, 68, 0.2)", "var(--accent-red)"),
+                        "outdated" => ("rgba(234, 179, 8, 0.2)", "var(--accent-yellow)"),
+                        "latest" => ("rgba(34, 197, 94, 0.2)", "var(--accent-green)"),
+                        _ => ("rgba(100, 116, 139, 0.2)", "var(--text-muted)"),
+                    };
+                    html.push_str(&format!(
+                        r#"<div style="display: flex; align-items: center; gap: 0.75rem; margin-bottom: 0.5rem;">
+                            <span style="color: var(--text-secondary);">Version:</span>
+                            <code style="font-size: 0.95rem;">{}</code>
+                            <span style="background: {}; color: {}; padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.75rem; font-weight: 600;">{}</span>
+                        </div>"#,
+                        number, status_bg, status_color, status.to_uppercase()
+                    ));
+                }
+            }
+
+            // Users enumerated
+            if let Some(users) = result.get("users").and_then(|u| u.as_array()) {
+                if !users.is_empty() {
+                    let user_list: Vec<&str> = users.iter()
+                        .filter_map(|u| u["login"].as_str())
+                        .collect();
+                    html.push_str(&format!(
+                        r#"<div style="color: var(--text-secondary); margin-bottom: 0.5rem;">
+                            Users ({0}): <code>{1}</code>
+                        </div>"#,
+                        user_list.len(),
+                        user_list.join(", ")
+                    ));
+                }
+            }
+
+            html.push_str("</div>"); // Close target header
+
+            // Vulnerable plugins table
+            if let Some(plugins) = result.get("plugins").and_then(|p| p.as_array()) {
+                let vuln_plugins: Vec<_> = plugins.iter()
+                    .filter(|p| {
+                        p.get("vulnerabilities")
+                            .and_then(|v| v.as_array())
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false)
+                    })
+                    .collect();
+
+                if !vuln_plugins.is_empty() {
+                    html.push_str(r#"<div class="card" style="margin-bottom: 1rem;">
+                        <div class="card-header">
+                            <div class="card-title" style="font-size: 0.9rem;">
+                                <span style="color: var(--accent-red);">&#9888;</span>
+                                Vulnerable Plugins
+                            </div>"#);
+                    html.push_str(&format!(r#"<span class="card-badge" style="background: rgba(239, 68, 68, 0.2); color: var(--accent-red);">{}</span>"#, vuln_plugins.len()));
+                    html.push_str(r#"</div>
+                        <div class="card-body" style="padding: 0;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Plugin</th>
+                                        <th>Version</th>
+                                        <th>Vulnerability</th>
+                                        <th>Severity</th>
+                                        <th>CVE</th>
+                                        <th>Fixed In</th>
+                                    </tr>
+                                </thead>
+                                <tbody>"#);
+
+                    for plugin in &vuln_plugins {
+                        let slug = plugin["slug"].as_str().unwrap_or("unknown");
+                        let version = plugin["version"].as_str().unwrap_or("N/A");
+
+                        if let Some(vulns) = plugin.get("vulnerabilities").and_then(|v| v.as_array()) {
+                            for vuln in vulns {
+                                let title = vuln["title"].as_str().unwrap_or("Unknown");
+                                let severity = vuln["severity"].as_str().unwrap_or("info");
+                                let cve = vuln["cve"].as_str().unwrap_or("N/A");
+                                let fixed_in = vuln["fixed_in"].as_str().unwrap_or("N/A");
+
+                                let severity_class = match severity {
+                                    "critical" => "background: var(--accent-red); color: white;",
+                                    "high" => "background: var(--accent-orange); color: white;",
+                                    "medium" => "background: var(--accent-yellow); color: #1e293b;",
+                                    _ => "background: var(--accent-blue); color: white;",
+                                };
+
+                                html.push_str(&format!(
+                                    r#"<tr>
+                                        <td><code>{}</code></td>
+                                        <td>{}</td>
+                                        <td style="max-width: 300px;">{}</td>
+                                        <td><span style="padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; {}">{}</span></td>
+                                        <td><code style="font-size: 0.8rem;">{}</code></td>
+                                        <td>{}</td>
+                                    </tr>"#,
+                                    slug, version, title, severity_class, severity, cve, fixed_in
+                                ));
+                            }
+                        }
+                    }
+
+                    html.push_str("</tbody></table></div></div>");
+                }
+            }
+
+            // Vulnerable themes table
+            if let Some(themes) = result.get("themes").and_then(|t| t.as_array()) {
+                let vuln_themes: Vec<_> = themes.iter()
+                    .filter(|t| {
+                        t.get("vulnerabilities")
+                            .and_then(|v| v.as_array())
+                            .map(|a| !a.is_empty())
+                            .unwrap_or(false)
+                    })
+                    .collect();
+
+                if !vuln_themes.is_empty() {
+                    html.push_str(r#"<div class="card" style="margin-bottom: 1rem;">
+                        <div class="card-header">
+                            <div class="card-title" style="font-size: 0.9rem;">
+                                <span style="color: var(--accent-orange);">&#127912;</span>
+                                Vulnerable Themes
+                            </div>
+                        </div>
+                        <div class="card-body" style="padding: 0;">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Theme</th>
+                                        <th>Version</th>
+                                        <th>Vulnerability</th>
+                                        <th>Severity</th>
+                                        <th>CVE</th>
+                                    </tr>
+                                </thead>
+                                <tbody>"#);
+
+                    for theme in &vuln_themes {
+                        let slug = theme["slug"].as_str().unwrap_or("unknown");
+                        let version = theme["version"].as_str().unwrap_or("N/A");
+
+                        if let Some(vulns) = theme.get("vulnerabilities").and_then(|v| v.as_array()) {
+                            for vuln in vulns {
+                                let title = vuln["title"].as_str().unwrap_or("Unknown");
+                                let severity = vuln["severity"].as_str().unwrap_or("info");
+                                let cve = vuln["cve"].as_str().unwrap_or("N/A");
+
+                                let severity_class = match severity {
+                                    "critical" => "background: var(--accent-red); color: white;",
+                                    "high" => "background: var(--accent-orange); color: white;",
+                                    "medium" => "background: var(--accent-yellow); color: #1e293b;",
+                                    _ => "background: var(--accent-blue); color: white;",
+                                };
+
+                                html.push_str(&format!(
+                                    r#"<tr>
+                                        <td><code>{}</code></td>
+                                        <td>{}</td>
+                                        <td>{}</td>
+                                        <td><span style="padding: 0.125rem 0.5rem; border-radius: 4px; font-size: 0.7rem; font-weight: 700; text-transform: uppercase; {}">{}</span></td>
+                                        <td><code style="font-size: 0.8rem;">{}</code></td>
+                                    </tr>"#,
+                                    slug, version, title, severity_class, severity, cve
+                                ));
+                            }
+                        }
+                    }
+
+                    html.push_str("</tbody></table></div></div>");
+                }
+            }
+
+            // All vulnerabilities list
+            if let Some(vulns) = result.get("vulnerabilities").and_then(|v| v.as_array()) {
+                if !vulns.is_empty() {
+                    html.push_str(r#"<div class="card" style="margin-bottom: 1rem;">
+                        <div class="card-header">
+                            <div class="card-title" style="font-size: 0.9rem;">
+                                <span style="color: var(--accent-red);">&#128680;</span>
+                                All Vulnerabilities
+                            </div>"#);
+                    html.push_str(&format!(r#"<span class="card-badge" style="background: rgba(239, 68, 68, 0.2); color: var(--accent-red);">{}</span>"#, vulns.len()));
+                    html.push_str(r#"</div>
+                        <div class="card-body">"#);
+
+                    for vuln in vulns {
+                        let title = vuln["title"].as_str().unwrap_or("Unknown");
+                        let severity = vuln["severity"].as_str().unwrap_or("info");
+                        let cve = vuln["cve"].as_str().unwrap_or("");
+                        let component = vuln["component"].as_str().unwrap_or("unknown");
+                        let fixed_in = vuln["fixed_in"].as_str().unwrap_or("");
+
+                        let severity_class = match severity {
+                            "critical" => "vuln-severity critical",
+                            "high" => "vuln-severity high",
+                            "medium" => "vuln-severity medium",
+                            _ => "vuln-severity low",
+                        };
+
+                        let mut extra_info = String::new();
+                        if !cve.is_empty() {
+                            extra_info.push_str(&format!("| {} ", cve));
+                        }
+                        if !fixed_in.is_empty() {
+                            extra_info.push_str(&format!("| Fixed in: {}", fixed_in));
+                        }
+
+                        html.push_str(&format!(
+                            r#"<div class="vuln-card" style="margin-bottom: 0.75rem;">
+                                <div class="vuln-card-header">
+                                    <span class="{}">{}</span>
+                                    <div class="vuln-info">
+                                        <div class="vuln-name">{}</div>
+                                        <div class="vuln-template">Component: {} {}</div>
+                                    </div>
+                                </div>
+                            </div>"#,
+                            severity_class,
+                            severity.to_uppercase(),
+                            title,
+                            component,
+                            extra_info
+                        ));
+                    }
+
+                    html.push_str("</div></div>");
+                }
+            }
+        }
+    }
+
+    html.push_str("</div></div></div>");
+    html
 }
 
 fn generate_raw_data_tab(metrics: &[Value]) -> String {

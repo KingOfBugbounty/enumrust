@@ -34,6 +34,8 @@ mod secret_validators;
 mod secrets_scanner;
 mod info_disclosure_scanner;
 mod ollama;
+mod wpscan;
+mod shortscan;
 
 use metrics::EnumRustMetrics;
 use progress::{EventType, ProgressTracker};
@@ -368,6 +370,29 @@ struct Args {
     revalidate_tools: bool,
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // WPSCAN OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// WPScan API token for vulnerability data (optional, enhances results)
+    #[arg(long, value_name = "TOKEN", help_heading = "WPScan",
+          help = "WPScan API token for vulnerability database (get free token at https://wpscan.com)")]
+    wpscan_token: Option<String>,
+
+    /// Disable WordPress scanning even if WordPress is detected
+    #[arg(long, help_heading = "WPScan",
+          help = "Skip WordPress vulnerability scanning (WPScan) even if WordPress sites are detected")]
+    no_wpscan: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // IIS SHORT FILENAME SCANNING
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Disable IIS short filename scanning (shortscan)
+    #[arg(long, help_heading = "Shortscan",
+          help = "Skip IIS short filename scanning (shortscan) even if IIS servers are detected")]
+    no_shortscan: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // AI ANALYSIS OPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -596,6 +621,16 @@ async fn main() -> Result<()> {
                 if args.ip_fuzz_timeout != 60 {
                     cmd_args.push("--ip-fuzz-timeout".to_string());
                     cmd_args.push(args.ip_fuzz_timeout.to_string());
+                }
+                if args.no_wpscan {
+                    cmd_args.push("--no-wpscan".to_string());
+                }
+                if args.no_shortscan {
+                    cmd_args.push("--no-shortscan".to_string());
+                }
+                if let Some(ref token) = args.wpscan_token {
+                    cmd_args.push("--wpscan-token".to_string());
+                    cmd_args.push(token.clone());
                 }
                 let cmd_string = format!("{} {}", current_exe.display(), cmd_args.join(" "));
 
@@ -1829,10 +1864,181 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     }
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STAGE 8: PACKAGE SCANNER (81-84%)
+    // STAGE 7.6: WORDPRESS VULNERABILITY SCANNING (79-81%)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let mut wpscan_all_results: Vec<wpscan::WPScanResults> = Vec::new();
+
+    if !args.no_wpscan {
+        let wp_targets = wpscan::detect_wordpress(&admin_panels, &http200_urls);
+
+        if !wp_targets.is_empty() {
+            println!("\n{}", "═══════════════════════════════════════════════════════════════".magenta().bold());
+            println!("{}", "  STAGE 7.6: WORDPRESS VULNERABILITY SCANNING (79-81%)".magenta().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".magenta().bold());
+            println!("{}", format!("[*] Detected {} WordPress target(s)", wp_targets.len()).cyan());
+
+            if wpscan::ensure_wpscan_docker().await.unwrap_or(false) {
+                progress.tool_started("WPScan");
+
+                let max_targets = wp_targets.len().min(5);
+                for (idx, target) in wp_targets.iter().take(max_targets).enumerate() {
+                    println!("{}", format!("\n[*] [{}/{}] Scanning: {}", idx + 1, max_targets, target).cyan());
+
+                    match wpscan::run_wpscan(
+                        target,
+                        &base_path,
+                        args.wpscan_token.as_deref(),
+                        idx,
+                    ).await {
+                        Ok(mut results) => {
+                            // AI Filter: Validate WPScan vulnerabilities with Ollama
+                            if ollama.is_available().await && !results.vulnerabilities.is_empty() {
+                                println!("{}", "[AI] Validando vulnerabilidades WordPress com Ollama...".cyan());
+                                let before_count = results.vulnerabilities.len();
+                                let mut filtered_vulns = Vec::new();
+
+                                for vuln in &results.vulnerabilities {
+                                    let verdict = ollama.analyze_wpscan_finding(
+                                        &vuln.component,
+                                        &vuln.fixed_in.as_deref().unwrap_or("N/A"),
+                                        &vuln.title,
+                                        &vuln.severity,
+                                        &vuln.cve.as_deref().unwrap_or("N/A"),
+                                        &vuln.fixed_in.as_deref().unwrap_or("N/A"),
+                                        target,
+                                    ).await;
+
+                                    match verdict {
+                                        Some(v) if !v.is_real && v.confidence >= 70 => {
+                                            println!("{}", format!("  [AI] WP FP: {} ({})", vuln.title, v.reason).bright_black());
+                                        }
+                                        _ => filtered_vulns.push(vuln.clone()),
+                                    }
+                                }
+
+                                let removed = before_count - filtered_vulns.len();
+                                if removed > 0 {
+                                    println!("{}", format!("[AI] WordPress: {} falsos positivos removidos ({} vulns validas)", removed, filtered_vulns.len()).green());
+                                    results.vulnerabilities = filtered_vulns;
+                                    results.total_vulnerabilities = results.vulnerabilities.len();
+                                }
+                            }
+
+                            wpscan::display_wpscan_summary(&results);
+
+                            // Discord notification for critical/high WPScan findings
+                            if let Some(ref webhook_url) = args.discord_webhook {
+                                let critical_vulns: Vec<_> = results.vulnerabilities.iter()
+                                    .filter(|v| v.severity == "critical" || v.severity == "high")
+                                    .collect();
+                                if !critical_vulns.is_empty() {
+                                    let vuln_summary: Vec<String> = critical_vulns.iter().take(5)
+                                        .map(|v| format!("[{}] {} ({})", v.severity.to_uppercase(), v.title, v.cve.as_deref().unwrap_or("no CVE")))
+                                        .collect();
+                                    let fields = vec![
+                                        ("Target".to_string(), target.to_string(), true),
+                                        ("Vulns".to_string(), format!("{} critical/high", critical_vulns.len()), true),
+                                        ("Details".to_string(), vuln_summary.join("\n"), false),
+                                    ];
+                                    let _ = discord_notifier::send_discord_notification(
+                                        webhook_url,
+                                        &format!("WordPress Vulnerabilities - {}", domain),
+                                        &format!("{} critical/high vulnerabilities found on WordPress site", critical_vulns.len()),
+                                        0xff0000,
+                                        fields,
+                                    ).await;
+                                }
+                            }
+
+                            wpscan_all_results.push(results);
+                        }
+                        Err(e) => {
+                            println!("{}", format!("[!] WPScan failed for {}: {}", target, e).yellow());
+                        }
+                    }
+                }
+
+                // Save all WPScan results
+                if !wpscan_all_results.is_empty() {
+                    let wpscan_file = base_path.join("wpscan_results.json");
+                    if let Err(e) = wpscan::save_wpscan_results(&wpscan_all_results, &wpscan_file) {
+                        println!("{}", format!("[!] Failed to save WPScan results: {}", e).yellow());
+                    } else {
+                        println!("{}", format!("[+] WPScan results saved to: {}", wpscan_file.display()).green());
+                    }
+                }
+
+                progress.tool_completed("WPScan", 81.0);
+            } else {
+                println!("{}", "[!] Docker not available - skipping WordPress vulnerability scanning".yellow());
+                println!("{}", "    Install Docker: curl -fsSL https://get.docker.com | sh".yellow());
+                println!("{}", "    Then pull image: docker pull wpscanteam/wpscan".yellow());
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STAGE 7.7: IIS SHORT FILENAME SCANNING (81-82%)
+    // ═══════════════════════════════════════════════════════════════════════════
+    let mut shortscan_all_results: Vec<shortscan::ShortscanResult> = Vec::new();
+
+    if !args.no_shortscan {
+        println!("{}", "[*] Checking for IIS servers...".cyan());
+        let iis_targets = shortscan::detect_iis_servers(&http200_urls).await;
+
+        if !iis_targets.is_empty() {
+            println!("\n{}", "═══════════════════════════════════════════════════════════════".magenta().bold());
+            println!("{}", "  STAGE 7.7: IIS SHORT FILENAME SCANNING (81-82%)".magenta().bold());
+            println!("{}", "═══════════════════════════════════════════════════════════════".magenta().bold());
+            println!("{}", format!("[*] Detected {} IIS server(s)", iis_targets.len()).cyan());
+
+            if let Some(_shortscan_path) = discover_tool_path("shortscan") {
+                progress.tool_started("Shortscan");
+
+                let max_targets = iis_targets.len().min(10);
+                for (idx, target) in iis_targets.iter().take(max_targets).enumerate() {
+                    println!("{}", format!("\n[*] [{}/{}] Scanning: {}", idx + 1, max_targets, target).cyan());
+
+                    match shortscan::run_shortscan(
+                        target,
+                        &base_path,
+                        idx,
+                    ).await {
+                        Ok(results) => {
+                            shortscan::display_shortscan_summary(&results);
+                            if results.total_findings > 0 {
+                                shortscan_all_results.push(results);
+                            }
+                        }
+                        Err(e) => {
+                            println!("{}", format!("[!] Shortscan failed for {}: {}", target, e).yellow());
+                        }
+                    }
+                }
+
+                // Save all shortscan results
+                if !shortscan_all_results.is_empty() {
+                    let shortscan_file = base_path.join("shortscan_results.json");
+                    if let Err(e) = shortscan::save_shortscan_results(&shortscan_all_results, &shortscan_file) {
+                        println!("{}", format!("[!] Failed to save shortscan results: {}", e).yellow());
+                    } else {
+                        println!("{}", format!("[+] Shortscan results saved to: {}", shortscan_file.display()).green());
+                    }
+                }
+
+                progress.tool_completed("Shortscan", 82.0);
+            } else {
+                println!("{}", "[!] shortscan not installed - skipping IIS short filename scanning".yellow());
+                println!("{}", "    Install: go install github.com/bitquark/shortscan/cmd/shortscan@latest".yellow());
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // STAGE 8: PACKAGE SCANNER (82-84%)
     // ═══════════════════════════════════════════════════════════════════════════
     println!("\n{}", "═══════════════════════════════════════════════════════════════".yellow().bold());
-    println!("{}", "  STAGE 8: PACKAGE DEPENDENCY SCANNER (81-84%)".yellow().bold());
+    println!("{}", "  STAGE 8: PACKAGE DEPENDENCY SCANNER (82-84%)".yellow().bold());
     println!("{}", "═══════════════════════════════════════════════════════════════".yellow().bold());
 
     progress.tool_started("Package Scanner");
@@ -2790,6 +2996,8 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         &trufflehog_secrets,
         &admin_panels,
         nuclei_count,
+        &wpscan_all_results,
+        &shortscan_all_results,
     )?;
 
     println!("{}", format!("[+] Consolidated report: {}", all_results_file.display()).green().bold());
@@ -2803,6 +3011,16 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         }
         for panel in admin_panels.iter().filter(|p| p.is_likely_admin).take(3) {
             critical_findings.push(format!("Admin Panel: {} ({})", panel.url, panel.title.as_deref().unwrap_or("N/A")));
+        }
+        for wp_result in &wpscan_all_results {
+            for vuln in wp_result.vulnerabilities.iter().filter(|v| v.severity == "critical" || v.severity == "high").take(3) {
+                critical_findings.push(format!("WordPress {}: {} on {} ({})", vuln.severity.to_uppercase(), vuln.title, wp_result.target_url, vuln.cve.as_deref().unwrap_or("no CVE")));
+            }
+        }
+        for ss_result in &shortscan_all_results {
+            if ss_result.total_findings > 0 {
+                critical_findings.push(format!("IIS 8.3 Short Filenames: {} hidden file(s) on {}", ss_result.total_findings, ss_result.target_url));
+            }
         }
 
         if let Some(summary) = ollama.generate_executive_summary(
@@ -2860,7 +3078,9 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
 
     // Send final scan summary to Discord
     if let Some(ref webhook_url) = args.discord_webhook {
-        let total_findings = admin_panels.len() + enhanced_secrets.len() + trufflehog_secrets.len() + nuclei_count;
+        let wpscan_vuln_count: usize = wpscan_all_results.iter().map(|r| r.total_vulnerabilities).sum();
+        let shortscan_finding_count: usize = shortscan_all_results.iter().map(|r| r.total_findings).sum();
+        let total_findings = admin_panels.len() + enhanced_secrets.len() + trufflehog_secrets.len() + nuclei_count + wpscan_vuln_count + shortscan_finding_count;
         let _ = discord_notifier::notify_scan_complete(
             webhook_url,
             domain,
@@ -2888,6 +3108,8 @@ fn generate_consolidated_report(
     trufflehog_secrets: &[serde_json::Value],
     admin_panels: &[admin_finder::AdminPanelResult],
     vulnerabilities: usize,
+    wpscan_results: &[wpscan::WPScanResults],
+    shortscan_results: &[shortscan::ShortscanResult],
 ) -> Result<()> {
     let mut file = File::create(output_file)?;
 
@@ -2907,7 +3129,56 @@ fn generate_consolidated_report(
     writeln!(file, "  - Hardcoded secrets: {}", secrets.len())?;
     writeln!(file, "  - TruffleHog secrets: {}", trufflehog_secrets.len())?;
     writeln!(file, "  - Vulnerabilities: {}", vulnerabilities)?;
+
+    // WordPress section
+    if !wpscan_results.is_empty() {
+        let total_wp_vulns: usize = wpscan_results.iter().map(|r| r.total_vulnerabilities).sum();
+        let total_wp_users: usize = wpscan_results.iter().map(|r| r.users.len()).sum();
+        writeln!(file, "  - WordPress sites scanned: {}", wpscan_results.len())?;
+        writeln!(file, "  - WordPress vulnerabilities: {}", total_wp_vulns)?;
+        writeln!(file, "  - WordPress users enumerated: {}", total_wp_users)?;
+    }
     writeln!(file)?;
+
+    // WordPress details
+    if !wpscan_results.is_empty() {
+        writeln!(file, "WORDPRESS FINDINGS:")?;
+        for result in wpscan_results {
+            writeln!(file, "  Target: {}", result.target_url)?;
+            if let Some(ref ver) = result.wordpress_version {
+                writeln!(file, "    Version: {} ({})", ver.number, ver.status)?;
+            }
+            if !result.vulnerabilities.is_empty() {
+                writeln!(file, "    Vulnerabilities:")?;
+                for vuln in &result.vulnerabilities {
+                    writeln!(file, "      - [{}] {} ({})", vuln.severity.to_uppercase(), vuln.title, vuln.cve.as_deref().unwrap_or("no CVE"))?;
+                }
+            }
+            if !result.users.is_empty() {
+                let user_list: Vec<&str> = result.users.iter().map(|u| u.login.as_str()).collect();
+                writeln!(file, "    Users: {}", user_list.join(", "))?;
+            }
+        }
+        writeln!(file)?;
+    }
+
+    // IIS Short Filename section
+    if !shortscan_results.is_empty() {
+        let total_short_findings: usize = shortscan_results.iter().map(|r| r.total_findings).sum();
+        writeln!(file, "  - IIS servers scanned (shortscan): {}", shortscan_results.len())?;
+        writeln!(file, "  - IIS short filenames discovered: {}", total_short_findings)?;
+        writeln!(file)?;
+
+        writeln!(file, "IIS SHORT FILENAME FINDINGS:")?;
+        for result in shortscan_results {
+            writeln!(file, "  Target: {}", result.target_url)?;
+            for finding in &result.findings {
+                let fullname = finding.fullname.as_deref().unwrap_or("???");
+                writeln!(file, "    - [{}] {} -> {}", finding.finding_type.to_uppercase(), finding.shortname, fullname)?;
+            }
+        }
+        writeln!(file)?;
+    }
 
     writeln!(file, "OUTPUT FILES:")?;
     for entry in (fs::read_dir(base_path)?).flatten() {
@@ -3158,6 +3429,20 @@ fn get_tools_list() -> Vec<ToolInfo> {
             description: "Fetch URLs from Wayback Machine",
             is_core: false,
             install_cmd: "go install -v github.com/tomnomnom/waybackurls@latest",
+        },
+        ToolInfo {
+            name: "wpscan",
+            binary: "docker",
+            description: "WordPress security scanner (Docker)",
+            is_core: false,
+            install_cmd: "curl -fsSL https://get.docker.com | sh && docker pull wpscanteam/wpscan",
+        },
+        ToolInfo {
+            name: "shortscan",
+            binary: "shortscan",
+            description: "IIS short filename scanner",
+            is_core: false,
+            install_cmd: "go install github.com/bitquark/shortscan/cmd/shortscan@latest",
         },
     ]
 }
@@ -3471,6 +3756,8 @@ fn is_tool_needed_for_scan(binary: &str, args: &Args) -> bool {
         "katana" => true,
         "gau" => true,
         "waybackurls" => true,
+        "docker" => !args.no_wpscan, // WPScan runs via Docker
+        "shortscan" => !args.no_shortscan, // IIS short filename scanning
         _ => false,
     }
 }
