@@ -36,6 +36,7 @@ mod info_disclosure_scanner;
 mod ollama;
 mod wpscan;
 mod shortscan;
+mod update_checker;
 
 use metrics::EnumRustMetrics;
 use progress::{EventType, ProgressTracker};
@@ -393,6 +394,20 @@ struct Args {
     no_shortscan: bool,
 
     // ═══════════════════════════════════════════════════════════════════════════
+    // UPDATE OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Skip auto-update check on startup
+    #[arg(long, help_heading = "Tool Management",
+          help = "Skip automatic update check on startup")]
+    no_update: bool,
+
+    /// Check for updates and exit
+    #[arg(long, help_heading = "Tool Management",
+          help = "Check for updates from GitHub and apply if available")]
+    check_update: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
     // AI ANALYSIS OPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -406,6 +421,18 @@ async fn main() -> Result<()> {
 
     // Print banner
     print_banner();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // AUTO-UPDATE CHECK
+    // ═══════════════════════════════════════════════════════════════════════════
+    if args.check_update {
+        update_checker::check_and_update_force().await;
+        return Ok(());
+    }
+
+    if !args.no_update {
+        update_checker::check_and_update().await;
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // TOOL MANAGEMENT: Install or check tools
@@ -768,7 +795,7 @@ fn print_banner() {
     println!("{}", "  ███████╗██║ ╚████║╚██████╔╝██║ ╚═╝ ██║██║  ██║╚██████╔╝███████║   ██║   ".cyan().bold());
     println!("{}", "  ╚══════╝╚═╝  ╚═══╝ ╚═════╝ ╚═╝     ╚═╝╚═╝  ╚═╝ ╚═════╝ ╚══════╝   ╚═╝   ".cyan().bold());
     println!("{}", "═══════════════════════════════════════════════════════════════".cyan().bold());
-    println!("{}", "  EnumRust v2.2.0 - Advanced Security Reconnaissance".white().bold());
+    println!("{}", format!("  EnumRust v{} - Advanced Security Reconnaissance", env!("CARGO_PKG_VERSION")).white().bold());
     println!("{}", "  Offensive Security | OSINT | Vulnerability Assessment".white());
     println!("{}", "═══════════════════════════════════════════════════════════════\n".cyan().bold());
 }
