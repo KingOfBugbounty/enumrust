@@ -12,7 +12,6 @@ use colored::*;
 use reqwest::Client;
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
-use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
@@ -21,7 +20,6 @@ use tokio::process::Command;
 mod admin_finder;
 mod bruteforce;
 mod credential_tester;
-mod dashboard;
 mod discord_notifier;
 mod ip_scanner;
 mod ip_validator;
@@ -117,9 +115,6 @@ EXAMPLES:
 
   Enable login bruteforce:
     enumrust -d example.com --bruteforce --userlist users.txt --passlist passwords.txt
-
-  Start web dashboard:
-    enumrust --dashboard --dashboard-port 8080
 
 ═══════════════════════════════════════════════════════════════════════════════
 
@@ -310,25 +305,6 @@ struct Args {
     passlist: Option<String>,
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // DASHBOARD OPTIONS
-    // ═══════════════════════════════════════════════════════════════════════════
-
-    /// Run in dashboard mode (web UI + REST API)
-    #[arg(long, help_heading = "Dashboard",
-          help = "Start web dashboard for scan management and monitoring")]
-    dashboard: bool,
-
-    /// Dashboard port
-    #[arg(long, default_value = "3000", value_name = "PORT", help_heading = "Dashboard",
-          help = "Port for the web dashboard (default: 3000)")]
-    dashboard_port: u16,
-
-    /// Disable auto-start dashboard during scans
-    #[arg(long, help_heading = "Dashboard",
-          help = "Don't start dashboard in background during domain scans")]
-    no_dashboard: bool,
-
-    // ═══════════════════════════════════════════════════════════════════════════
     // NOTIFICATION OPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
@@ -483,66 +459,8 @@ async fn main() -> Result<()> {
         validate_tools_before_scan(&args).await?;
     }
 
-    // Mode selection: dashboard, file, or single domain scan
-    if args.dashboard && args.domain.is_some() {
-        // Dashboard + Domain scan mode: run both concurrently
-        let domain = args.domain.as_ref().unwrap().clone();
-        let port = args.dashboard_port;
-        println!("{}", format!("[*] Starting EnumRust Dashboard + Scan mode on port {}...", port).cyan());
-        println!("{}", format!("[*] Target: {}", domain).green().bold());
-
-        // Start dashboard in background
-        tokio::spawn(async move {
-            let base_path = std::path::PathBuf::from(".");
-            let _ = dashboard::start_dashboard_server(base_path, port).await;
-        });
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        println!("{}", format!("🚀 Dashboard disponível em http://0.0.0.0:{}", port).green().bold());
-        println!("{}", "   Acesse o dashboard para acompanhar o progresso em tempo real".cyan());
-        println!();
-
-        // Run domain scan
-        process_domain(&domain, &args).await?;
-
-        // After scan completes, keep dashboard alive
-        println!();
-        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
-        println!("{}", "✅ Scan completo! Dashboard continua ativo para visualização.".green().bold());
-        println!("{}", format!("🌐 Acesse: http://0.0.0.0:{}", port).cyan());
-        println!("{}", "   Pressione Ctrl+C para encerrar.".cyan());
-        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
-        tokio::signal::ctrl_c().await?;
-    } else if args.dashboard && args.file.is_some() {
-        // Dashboard + File scan mode: run both concurrently
-        let file_path = args.file.as_ref().unwrap().clone();
-        let port = args.dashboard_port;
-        println!("{}", format!("[*] Starting EnumRust Dashboard + File scan mode on port {}...", port).cyan());
-
-        // Start dashboard in background
-        tokio::spawn(async move {
-            let base_path = std::path::PathBuf::from(".");
-            let _ = dashboard::start_dashboard_server(base_path, port).await;
-        });
-        tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-        println!("{}", format!("🚀 Dashboard disponível em http://0.0.0.0:{}", port).green().bold());
-        println!();
-
-        // Run file scan
-        process_domains_from_file(&file_path, &args).await?;
-
-        // After scan completes, keep dashboard alive
-        println!();
-        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
-        println!("{}", "✅ Scan completo! Dashboard continua ativo para visualização.".green().bold());
-        println!("{}", format!("🌐 Acesse: http://0.0.0.0:{}", port).cyan());
-        println!("{}", "   Pressione Ctrl+C para encerrar.".cyan());
-        println!("{}", "═══════════════════════════════════════════════════════════════".green().bold());
-        tokio::signal::ctrl_c().await?;
-    } else if args.dashboard {
-        // Dashboard-only mode (no scan)
-        println!("{}", format!("[*] Starting EnumRust Dashboard on port {}...", args.dashboard_port).cyan());
-        run_dashboard(args.dashboard_port).await?;
-    } else if let Some(ref file_path) = args.file {
+    // Mode selection: file or single domain scan
+    if let Some(ref file_path) = args.file {
         // Process multiple domains from file
         println!("{}", format!("[*] Processing domains from file: {}", file_path).cyan().bold());
         process_domains_from_file(file_path, &args).await?;
@@ -605,9 +523,6 @@ async fn main() -> Result<()> {
                 }
                 if args.whois {
                     cmd_args.push("--whois".to_string());
-                }
-                if args.no_dashboard {
-                    cmd_args.push("--no-dashboard".to_string());
                 }
                 if args.bruteforce {
                     cmd_args.push("--bruteforce".to_string());
@@ -710,50 +625,17 @@ async fn main() -> Result<()> {
         }
         // Run domain scan mode
         println!("{}", format!("[*] Starting domain scan for: {}", domain).green().bold());
-
-        // Auto-start dashboard in background if not already running (unless --no-dashboard)
-        const DASHBOARD_PORT: u16 = 8080;
-        if !args.no_dashboard {
-            if !is_port_in_use(DASHBOARD_PORT) {
-                // Port is available, start dashboard in background
-                println!("{}", format!("[*] Starting dashboard in background on port {}...", DASHBOARD_PORT).cyan());
-
-                tokio::spawn(async move {
-                    let base_path = std::path::PathBuf::from(".");
-                    let _ = dashboard::start_dashboard_server(base_path, DASHBOARD_PORT).await;
-                });
-
-                // Give the dashboard server time to start
-                tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-                println!("{}", format!("🚀 Dashboard iniciado em http://localhost:{}", DASHBOARD_PORT).green().bold());
-                println!("{}", "   Acesse o dashboard para acompanhar o progresso em tempo real".cyan());
-            } else {
-                // Port is already in use, dashboard is likely already running
-                println!("{}", format!("ℹ️  Dashboard já está rodando em http://localhost:{}", DASHBOARD_PORT).yellow());
-            }
-        } else {
-            println!("{}", "[*] Dashboard disabled (--no-dashboard flag set)".yellow());
-        }
-
-        // Continue with domain scan
         process_domain(domain, &args).await?;
     } else {
         // No mode specified
-        eprintln!("{}", "[ERROR] Please specify --domain, --file, or --dashboard mode".red().bold());
+        eprintln!("{}", "[ERROR] Please specify --domain or --file".red().bold());
         eprintln!("{}", "Usage:".yellow());
-        eprintln!("  enumrust --domain example.com");
-        eprintln!("  enumrust --file domains.txt");
-        eprintln!("  enumrust --dashboard");
+        eprintln!("  enumrust --domain example.com --subfinder");
+        eprintln!("  enumrust --file domains.txt --full-scan");
         std::process::exit(1);
     }
 
     Ok(())
-}
-
-/// Check if a port is already in use
-fn is_port_in_use(port: u16) -> bool {
-    TcpListener::bind(("127.0.0.1", port)).is_err()
 }
 
 /// Check if currently running inside a tmux session
@@ -798,12 +680,6 @@ fn print_banner() {
     println!("{}", format!("  EnumRust v{} - Advanced Security Reconnaissance", env!("CARGO_PKG_VERSION")).white().bold());
     println!("{}", "  Offensive Security | OSINT | Vulnerability Assessment".white());
     println!("{}", "═══════════════════════════════════════════════════════════════\n".cyan().bold());
-}
-
-/// Run dashboard mode (web UI + REST API)
-async fn run_dashboard(port: u16) -> Result<()> {
-    let base_path = std::path::PathBuf::from(".");
-    dashboard::start_dashboard_server(base_path, port).await
 }
 
 /// Process multiple domains from a file
