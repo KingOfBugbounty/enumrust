@@ -75,7 +75,7 @@ EnumRust performs comprehensive security reconnaissance including:
 
   🎯 VULNERABILITY SCANNING
      • Nuclei vulnerability scanner
-     • Feroxbuster directory enumeration
+     • Chameleon directory enumeration
      • Package dependency analysis
 
   🚨 BUG BOUNTY MODE
@@ -136,7 +136,7 @@ OUTPUT FILES:
   │   └── ip_scan_complete.json   # Complete results
   └── files_/
       ├── nuclei.txt          # Vulnerabilities found
-      └── ferox_*.txt         # Directory enumeration
+      └── chameleon_*.txt     # Directory enumeration
 
 ═══════════════════════════════════════════════════════════════════════════════
 "#,
@@ -154,12 +154,12 @@ IP SCANNING OPTIONS:
     • Combined: "80,443,8000-8100,9443"
 
   The fuzzing uses ffuf with recursion. If ffuf is not available,
-  it falls back to feroxbuster.
+  it falls back to chameleon.
 
 REQUIRED TOOLS:
 
   Core:      httpx, dnsx, masscan (sudo), nuclei
-  Optional:  subfinder, haktrails, tlsx, feroxbuster, ffuf, trufflehog
+  Optional:  subfinder, haktrails, tlsx, chameleon, ffuf, trufflehog
 
   Install with: apt install masscan && go install -v github.com/projectdiscovery/httpx/cmd/httpx@latest
 
@@ -2360,14 +2360,14 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     };
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STAGE 11: NUCLEI + FEROXBUSTER (92-100%)
+    // STAGE 11: NUCLEI + CHAMELEON (92-100%)
     // ═══════════════════════════════════════════════════════════════════════════
     println!("\n{}", "╔═══════════════════════════════════════════════════════════════════════════════╗".magenta().bold());
     println!("{}", "║  🎯 STAGE 11: VULNERABILITY SCANNING & DIRECTORY ENUMERATION (92-100%)        ║".magenta().bold());
     println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".magenta().bold());
 
     let nuclei_file = files_dir.join("nuclei.txt");
-    let ferox_access_file = files_dir.join("ferox_access_pages.txt");
+    let chameleon_access_file = files_dir.join("chameleon_access_pages.txt");
 
     // ═══════════════════════════════════════════════════════════════════════════
     // STEP 1: NUCLEI VULNERABILITY SCAN
@@ -2501,179 +2501,143 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     println!();
 
     // ═══════════════════════════════════════════════════════════════════════════
-    // STEP 2: FEROXBUSTER DIRECTORY ENUMERATION
+    // STEP 2: CHAMELEON DIRECTORY ENUMERATION
     // ═══════════════════════════════════════════════════════════════════════════
     println!("{}", "┌───────────────────────────────────────────────────────────────────────────────┐".cyan().bold());
-    println!("{}", "│  📂 FEROXBUSTER - Directory Enumeration                                       │".cyan().bold());
+    println!("{}", "│  📂 CHAMELEON - Smart Directory Enumeration (Wappalyzer tech detection)       │".cyan().bold());
     println!("{}", "├───────────────────────────────────────────────────────────────────────────────┤".cyan());
 
     let targets_to_scan = http200_urls.len().min(10);
     println!("{}", format!("│  🎯 Targets: {} URLs (max 10){}│", targets_to_scan, " ".repeat(52_usize.saturating_sub(targets_to_scan.to_string().len()))).cyan());
-    println!("{}", format!("│  📝 Output: {}{}│", ferox_access_file.display(), " ".repeat(53_usize.saturating_sub(ferox_access_file.display().to_string().len()))).cyan());
-    println!("{}", "│  ⚙️  Depth: 2 | Threads: 50                                                   │".cyan());
+    println!("{}", format!("│  📝 Output: {}{}│", chameleon_access_file.display(), " ".repeat(53_usize.saturating_sub(chameleon_access_file.display().to_string().len()))).cyan());
+    println!("{}", "│  ⚙️  Threads: 50 | Tech detect: ON (-a) | Multi-host: ON (-L)                │".cyan());
     println!("{}", "└───────────────────────────────────────────────────────────────────────────────┘".cyan());
     println!();
 
-    progress.tool_started("Feroxbuster");
+    progress.tool_started("Chameleon");
 
-    // Try to find wordlist - auto-detect relative to binary
-    let exe_dir_ferox = std::env::current_exe().ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .unwrap_or_default();
-    let dynamic_wordlist = format!("{}/../../src/words_and_files_top5000.txt", exe_dir_ferox.display());
-    let wordlist_paths = [
-        dynamic_wordlist.as_str(),
-        "src/words_and_files_top5000.txt",
-        "./src/words_and_files_top5000.txt",
-        "/usr/share/wordlists/dirb/common.txt",
-    ];
+    let chameleon_count;
 
-    let wordlist = wordlist_paths.iter()
-        .find(|p| std::path::Path::new(p).exists())
-        .map(|s| s.to_string());
-
-    let ferox_count;
-
-    if let Some(wordlist_path) = wordlist {
-        // Run Feroxbuster for each target sequentially with progress
-        for (idx, url) in http200_urls.iter().take(10).enumerate() {
-            println!("{}", format!("   🔍 [{}/{}] Scanning: {}", idx + 1, targets_to_scan, url).yellow());
-
-            let ferox_output = base_path.join(format!("ferox_{}.txt", idx));
-            let _ = Command::new("feroxbuster")
-                .args([
-                    "-u",
-                    url,
-                    "-w",
-                    &wordlist_path,
-                    "-t",
-                    "50",
-                    "-d",
-                    "2",
-                    "-q",
-                    "-C", "404",
-                    "--auto-tune",
-                    "--no-state",
-                    "--time-limit", "5m",
-                    "-o",
-                    &ferox_output.to_string_lossy(),
-                ])
-                .stdin(std::process::Stdio::null())
-                .stdout(std::process::Stdio::null())
-                .stderr(std::process::Stdio::null())
-                .status()
-                .await;
-
-            // Count findings for this target
-            let target_findings = if ferox_output.exists() {
-                count_lines(&ferox_output).unwrap_or(0)
-            } else {
-                0
-            };
-
-            if target_findings > 0 {
-                println!("{}", format!("      └─ ✅ Found {} paths", target_findings).green());
-            } else {
-                println!("{}", "      └─ ⚪ No findings".bright_black());
+    {
+        // Write http200 URLs to temp file for chameleon -L flag
+        let chameleon_hosts_file = base_path.join("chameleon_hosts.txt");
+        {
+            let urls_to_scan: Vec<&String> = http200_urls.iter().take(10).collect();
+            let mut hosts_file = OpenOptions::new()
+                .create(true).write(true).truncate(true)
+                .open(&chameleon_hosts_file)?;
+            for url in &urls_to_scan {
+                writeln!(hosts_file, "{}", url)?;
             }
+            println!("{}", format!("   📋 Wrote {} targets to {}", urls_to_scan.len(), chameleon_hosts_file.display()).yellow());
         }
 
-        // Aggregate all feroxbuster results with status code filtering and size dedup
-        {
-            let mut all_lines: Vec<String> = Vec::new();
-            let mut seen_sizes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+        let chameleon_raw_output = base_path.join("chameleon_raw.txt");
 
-            for idx in 0..10 {
-                let ferox_output = base_path.join(format!("ferox_{}.txt", idx));
-                if ferox_output.exists() {
-                    if let Ok(content) = fs::read_to_string(&ferox_output) {
-                        for line in content.lines() {
-                            let trimmed = line.trim();
-                            if trimmed.is_empty() { continue; }
+        println!("{}", "   ⏳ Running Chameleon with auto tech detection...".yellow());
 
-                            // Parse feroxbuster output format: STATUS  METHOD  LINESl  WORDSw  SIZEc  URL
-                            // Also handles lines starting with URL directly
-                            let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        let _ = Command::new("chameleon")
+            .args([
+                "-L", &chameleon_hosts_file.to_string_lossy(),
+                "-a",
+                "-c", "200,204,301,302,307,401,403,405",
+                "-C", "404",
+                "-t", "50",
+                "-o", &chameleon_raw_output.to_string_lossy(),
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .await;
 
-                            // Try to extract status code from first field
-                            if let Some(first) = parts.first() {
-                                if let Ok(status) = first.parse::<u16>() {
-                                    // Filter: keep only useful status codes
-                                    match status {
-                                        200 | 201 | 301 | 302 | 403 => {
-                                            // Track response sizes for dedup (custom 404s have identical sizes)
-                                            // Size is typically the 5th field (e.g., "7944c")
-                                            let size_key = parts.get(4)
-                                                .map(|s| s.to_string())
-                                                .unwrap_or_default();
-                                            let count = seen_sizes.entry(size_key).or_insert(0);
-                                            *count += 1;
-                                            all_lines.push(trimmed.to_string());
-                                        }
-                                        _ => {
-                                            // Skip 404, 500, etc.
-                                            continue;
-                                        }
-                                    }
-                                } else {
-                                    // Line doesn't start with status code (URL or comment) - keep it
+        // Parse chameleon output and aggregate with status code filtering and size dedup
+        let mut all_lines: Vec<String> = Vec::new();
+        let mut seen_sizes: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+
+        if chameleon_raw_output.exists() {
+            if let Ok(content) = fs::read_to_string(&chameleon_raw_output) {
+                for line in content.lines() {
+                    let trimmed = line.trim();
+                    if trimmed.is_empty() { continue; }
+
+                    // Parse chameleon output format: STATUS SIZE URL
+                    // or lines that are just URLs
+                    let parts: Vec<&str> = trimmed.split_whitespace().collect();
+
+                    if let Some(first) = parts.first() {
+                        if let Ok(status) = first.parse::<u16>() {
+                            // Filter: keep only useful status codes
+                            match status {
+                                200 | 201 | 204 | 301 | 302 | 307 | 401 | 403 | 405 => {
+                                    // Track response sizes for dedup (custom 404s have identical sizes)
+                                    let size_key = parts.get(1)
+                                        .map(|s| s.to_string())
+                                        .unwrap_or_default();
+                                    let count = seen_sizes.entry(size_key).or_insert(0);
+                                    *count += 1;
                                     all_lines.push(trimmed.to_string());
                                 }
+                                _ => {
+                                    continue;
+                                }
                             }
+                        } else {
+                            // Line doesn't start with status code (URL or comment) - keep it
+                            all_lines.push(trimmed.to_string());
                         }
                     }
                 }
             }
+        }
 
-            // Dedup pass: remove lines with sizes that appear too many times (likely custom error pages)
-            let size_threshold = 5; // If >5 responses have the exact same size, likely custom 404
-            let before_dedup = all_lines.len();
-            all_lines.retain(|line| {
-                let parts: Vec<&str> = line.split_whitespace().collect();
-                if let Some(size_field) = parts.get(4) {
-                    let size_key = size_field.to_string();
-                    if let Some(&count) = seen_sizes.get(&size_key) {
-                        return count <= size_threshold;
-                    }
+        // Dedup pass: remove lines with sizes that appear too many times (likely custom error pages)
+        let size_threshold = 5;
+        let before_dedup = all_lines.len();
+        all_lines.retain(|line| {
+            let parts: Vec<&str> = line.split_whitespace().collect();
+            if let Some(size_field) = parts.get(1) {
+                let size_key = size_field.to_string();
+                if let Some(&count) = seen_sizes.get(&size_key) {
+                    return count <= size_threshold;
                 }
-                true // Keep lines without parseable size
-            });
-            let dedup_removed = before_dedup - all_lines.len();
-            if dedup_removed > 0 {
-                println!("{}", format!("   🧹 Removed {} duplicate-size responses (custom error pages)", dedup_removed).yellow());
             }
+            true
+        });
+        let dedup_removed = before_dedup - all_lines.len();
+        if dedup_removed > 0 {
+            println!("{}", format!("   🧹 Removed {} duplicate-size responses (custom error pages)", dedup_removed).yellow());
+        }
 
-            // Write filtered results
-            if let Ok(mut ferox_file) = OpenOptions::new()
-                .create(true)
-                .write(true)
-                .truncate(true)
-                .open(&ferox_access_file)
-            {
-                for line in &all_lines {
-                    let _ = writeln!(ferox_file, "{}", line);
-                }
+        // Write filtered results
+        if let Ok(mut out_file) = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&chameleon_access_file)
+        {
+            for line in &all_lines {
+                let _ = writeln!(out_file, "{}", line);
             }
         }
 
-        // AI Filter: Validate feroxbuster findings with Ollama
-        if ollama.is_available().await && ferox_access_file.exists() {
-            if let Ok(content) = fs::read_to_string(&ferox_access_file) {
+        // AI Filter: Validate chameleon findings with Ollama
+        if ollama.is_available().await && chameleon_access_file.exists() {
+            if let Ok(content) = fs::read_to_string(&chameleon_access_file) {
                 let all_lines: Vec<&str> = content.lines().filter(|l| !l.trim().is_empty()).collect();
                 if !all_lines.is_empty() {
-                    println!("{}", "[AI] Filtrando resultados do Feroxbuster com Ollama...".cyan());
+                    println!("{}", "[AI] Filtrando resultados do Chameleon com Ollama...".cyan());
                     let before_count = all_lines.len();
                     let mut validated_lines = Vec::new();
                     for line in &all_lines {
                         let parts: Vec<&str> = line.split_whitespace().collect();
-                        // Parse: STATUS METHOD LINESl WORDSw SIZEc URL
-                        let (status_code, response_size, url_str) = if parts.len() >= 6 {
+                        // Parse chameleon output: STATUS SIZE URL
+                        let (status_code, response_size, url_str) = if parts.len() >= 3 {
                             let sc = parts[0].parse::<u16>().unwrap_or(0);
-                            let sz = parts[4]; // e.g., "7944c"
-                            let u = parts[5]; // URL
+                            let sz = parts[1];
+                            let u = parts[2];
                             (sc, sz.to_string(), u.to_string())
                         } else if parts.len() == 1 {
-                            // Just a URL
                             (200, "unknown".to_string(), parts[0].to_string())
                         } else {
                             validated_lines.push(*line);
@@ -2691,7 +2655,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
                         ).await;
                         match verdict {
                             Some(v) if !v.is_real && v.confidence >= 70 => {
-                                println!("{}", format!("  [AI] Ferox FP: {} - {} ({})", status_code, path, v.reason).bright_black());
+                                println!("{}", format!("  [AI] Chameleon FP: {} - {} ({})", status_code, path, v.reason).bright_black());
                             }
                             _ => validated_lines.push(*line),
                         }
@@ -2699,33 +2663,30 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
                     let removed = before_count - validated_lines.len();
                     if removed > 0 {
                         let validated_content = validated_lines.join("\n");
-                        let _ = fs::write(&ferox_access_file, validated_content);
-                        println!("{}", format!("[AI] Feroxbuster: {} falsos positivos removidos ({} findings reais)", removed, validated_lines.len()).green());
+                        let _ = fs::write(&chameleon_access_file, validated_content);
+                        println!("{}", format!("[AI] Chameleon: {} falsos positivos removidos ({} findings reais)", removed, validated_lines.len()).green());
                     }
                 }
             }
         }
 
-        ferox_count = if ferox_access_file.exists() {
-            count_lines(&ferox_access_file)?
+        chameleon_count = if chameleon_access_file.exists() {
+            count_lines(&chameleon_access_file)?
         } else {
             0
         };
-    } else {
-        println!("{}", "   ⚠️  Wordlist not found, skipping directory enumeration".yellow());
-        ferox_count = 0;
     }
 
-    progress.tool_completed("Feroxbuster", 100.0);
-    progress.data_found("directory findings", ferox_count, 100.0);
+    progress.tool_completed("Chameleon", 100.0);
+    progress.data_found("directory findings", chameleon_count, 100.0);
 
-    // Display Feroxbuster results summary
+    // Display Chameleon results summary
     println!();
     println!("{}", "┌───────────────────────────────────────────────────────────────────────────────┐".green().bold());
-    println!("{}", "│  ✅ FEROXBUSTER SCAN COMPLETE                                                 │".green().bold());
+    println!("{}", "│  ✅ CHAMELEON SCAN COMPLETE                                                   │".green().bold());
     println!("{}", "├───────────────────────────────────────────────────────────────────────────────┤".green());
-    if ferox_count > 0 {
-        println!("{}", format!("│  📁 Found {} interesting paths/directories{}│", ferox_count, " ".repeat(42_usize.saturating_sub(ferox_count.to_string().len()))).cyan().bold());
+    if chameleon_count > 0 {
+        println!("{}", format!("│  📁 Found {} interesting paths/directories{}│", chameleon_count, " ".repeat(42_usize.saturating_sub(chameleon_count.to_string().len()))).cyan().bold());
     } else {
         println!("{}", "│  ⚪ No interesting paths found                                                │".bright_black());
     }
@@ -2739,7 +2700,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     println!("{}", "║  📊 STAGE 11 SUMMARY                                                          ║".magenta().bold());
     println!("{}", "╠═══════════════════════════════════════════════════════════════════════════════╣".magenta());
     println!("{}", format!("║  🔬 Nuclei Vulnerabilities: {}{}║", nuclei_count, " ".repeat(48_usize.saturating_sub(nuclei_count.to_string().len()))).magenta());
-    println!("{}", format!("║  📂 Directory Findings: {}{}║", ferox_count, " ".repeat(52_usize.saturating_sub(ferox_count.to_string().len()))).magenta());
+    println!("{}", format!("║  📂 Directory Findings: {}{}║", chameleon_count, " ".repeat(52_usize.saturating_sub(chameleon_count.to_string().len()))).magenta());
     println!("{}", "╚═══════════════════════════════════════════════════════════════════════════════╝".magenta().bold());
     println!();
 
@@ -3256,11 +3217,11 @@ fn get_tools_list() -> Vec<ToolInfo> {
             install_cmd: "go install -v github.com/ffuf/ffuf/v2@latest",
         },
         ToolInfo {
-            name: "feroxbuster",
-            binary: "feroxbuster",
-            description: "Recursive directory brute-forcer",
+            name: "chameleon",
+            binary: "chameleon",
+            description: "Smart directory brute-forcer with tech detection",
             is_core: false,
-            install_cmd: "apt-get install -y feroxbuster || cargo install feroxbuster || brew install feroxbuster",
+            install_cmd: "Download from https://github.com/iustin24/chameleon/releases",
         },
         ToolInfo {
             name: "trufflehog",
@@ -3360,7 +3321,7 @@ fn get_common_tool_paths() -> Vec<PathBuf> {
         PathBuf::from(format!("{}/bin", gopath)),
         PathBuf::from(format!("{}/go/bin", home)),
         PathBuf::from("/usr/local/go/bin"),
-        // Cargo binaries (feroxbuster, etc.)
+        // Cargo binaries (chameleon, etc.)
         PathBuf::from(format!("{}/.cargo/bin", home)),
         // System paths
         PathBuf::from("/usr/local/bin"),
@@ -3652,8 +3613,8 @@ fn is_tool_needed_for_scan(binary: &str, args: &Args) -> bool {
         "whois" => true, // WHOIS lookup
         "tmux" => false, // Nice to have but not required
         "hakrawler" => true, // URL discovery
-        "ffuf" => true,  // Directory fuzzing (has feroxbuster fallback)
-        "feroxbuster" => true, // Fallback fuzzer
+        "ffuf" => true,  // Directory fuzzing (has chameleon fallback)
+        "chameleon" => true, // Smart directory brute-forcer
         "trufflehog" => true, // Secret scanning
         "urlfinder" => true,
         "katana" => true,

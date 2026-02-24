@@ -470,43 +470,40 @@ async fn fuzz_single_ip(
             }
         }
         _ => {
-            println!("{}", format!("    [!] ffuf failed for {}, trying feroxbuster...", base_url).yellow());
+            println!("{}", format!("    [!] ffuf failed for {}, trying chameleon...", base_url).yellow());
 
-            // Fallback to feroxbuster
-            let ferox_output = output_dir.join(format!("ferox_ip_{}_{}.txt", port.ip.replace('.', "_"), port.port));
+            // Fallback to chameleon
+            let chameleon_output = output_dir.join(format!("chameleon_ip_{}_{}.txt", port.ip.replace('.', "_"), port.port));
 
-            let ferox_cmd = format!(
-                "feroxbuster -u {} -w {} -s 200 -d {} -t {} --timeout {} -q -o {} 2>/dev/null",
+            let chameleon_cmd = format!(
+                "chameleon -u {} -c 200 -t {} -o {} 2>/dev/null",
                 base_url,
-                wordlist,
-                config.depth,
                 config.threads,
-                config.timeout,
-                ferox_output.display()
+                chameleon_output.display()
             );
 
-            let ferox_status = Command::new("sh")
+            let chameleon_status = Command::new("sh")
                 .arg("-c")
-                .arg(&ferox_cmd)
+                .arg(&chameleon_cmd)
                 .status()
                 .await;
 
-            if let Ok(status) = ferox_status {
-                if status.success() && ferox_output.exists() {
-                    // Parse feroxbuster output (simple text format)
-                    if let Ok(content) = fs::read_to_string(&ferox_output) {
+            if let Ok(status) = chameleon_status {
+                if status.success() && chameleon_output.exists() {
+                    // Parse chameleon output (format: STATUS SIZE URL)
+                    if let Ok(content) = fs::read_to_string(&chameleon_output) {
                         for line in content.lines() {
-                            // feroxbuster format: 200 GET 1234l 5678w 9012c http://...
                             let parts: Vec<&str> = line.split_whitespace().collect();
-                            if parts.len() >= 6 {
+                            if parts.len() >= 3 {
                                 if let Ok(status) = parts[0].parse::<u16>() {
                                     if status == 200 {
-                                        let url = parts.last().unwrap_or(&"").to_string();
+                                        let url = parts[2].to_string();
+                                        let size = parts[1].parse::<u64>().ok();
 
                                         let path = DiscoveredPath {
                                             url: url.clone(),
                                             status_code: 200,
-                                            content_length: None,
+                                            content_length: size,
                                             content_type: None,
                                             title: None,
                                             redirect_url: None,
@@ -515,7 +512,7 @@ async fn fuzz_single_ip(
                                         discovered.push(path);
 
                                         // Display in side-by-side format
-                                        let display = format_discovery(&url, 200, None, None);
+                                        let display = format_discovery(&url, 200, size, None);
                                         println!("│ {} │", display);
                                     }
                                 }

@@ -576,7 +576,7 @@ Respond ONLY with JSON: {{"real": true/false, "confidence": 0-100, "reason": "br
         self.query(&prompt).await
     }
 
-    /// Analyze a feroxbuster directory finding for false positive filtering
+    /// Analyze a chameleon directory finding for false positive filtering
     pub async fn analyze_directory_finding(
         &self,
         url: &str,
@@ -585,7 +585,7 @@ Respond ONLY with JSON: {{"real": true/false, "confidence": 0-100, "reason": "br
         path: &str,
     ) -> Option<OllamaVerdict> {
         let prompt = format!(
-            r#"You are a security expert analyzing directory/path enumeration results from feroxbuster.
+            r#"You are a security expert analyzing directory/path enumeration results from chameleon.
 
 Analyze this finding and determine if it's a REAL interesting finding or a FALSE POSITIVE.
 

@@ -249,9 +249,49 @@ install_tool "shortscan"  "shortscan"  "IIS short filename scanner"        \
 step "5b/7  Installing Security Tools (Other)"
 # ─────────────────────────────────────────────────────────────
 
-# Feroxbuster (Rust)
-install_tool "feroxbuster" "feroxbuster" "Recursive directory brute-forcer" \
-    "cargo install feroxbuster"
+# Chameleon (directory brute-forcer with tech detection)
+if has_cmd chameleon; then
+    echo -e "  ${DIM}skip  chameleon - already installed${NC}"
+    SKIPPED=$((SKIPPED + 1))
+else
+    echo -e "  ${CYAN}install${NC}  ${BOLD}chameleon${NC} - Smart directory brute-forcer with tech detection"
+    ARCH=$(uname -m)
+    if [ "$ARCH" = "x86_64" ]; then
+        CHAMELEON_URL="https://github.com/iustin24/chameleon/releases/latest/download/x86_64-linux-chameleon.zip"
+    else
+        CHAMELEON_URL="https://github.com/iustin24/chameleon/releases/latest/download/x86_64-linux-chameleon.zip"
+    fi
+    if curl -sL "$CHAMELEON_URL" -o /tmp/chameleon.zip && \
+       unzip -o /tmp/chameleon.zip -d /tmp/chameleon_bin && \
+       mv /tmp/chameleon_bin/chameleon "$INSTALL_BIN/chameleon" && \
+       chmod +x "$INSTALL_BIN/chameleon"; then
+        echo -e "  ${GREEN}ok${NC}       chameleon installed"
+        INSTALLED=$((INSTALLED + 1))
+    else
+        echo -e "  ${RED}fail${NC}     chameleon - try: curl install from GitHub releases"
+        FAILED=$((FAILED + 1))
+    fi
+    rm -rf /tmp/chameleon.zip /tmp/chameleon_bin
+fi
+
+# Chameleon dependencies: headless Chrome libs + wordlists
+echo -e "  ${CYAN}install${NC}  ${BOLD}chameleon-deps${NC} - Chrome libs & wordlists for Chameleon"
+apt-get install -y --no-install-recommends \
+    libx11-xcb1 libxcomposite1 libxcursor1 libxdamage1 libxi6 libxtst6 \
+    libnss3 libcups2 libxss1 libxrandr2 libasound2t64 libatk1.0-0t64 \
+    libatk-bridge2.0-0t64 libpangocairo-1.0-0 libgtk-3-0t64 libgbm1 \
+    libdrm2 libxshmfence1 fonts-liberation unzip 2>/dev/null || true
+
+# Install chameleon wordlists & config if not present
+if [ ! -d "$HOME_DIR/.config/chameleon/wordlists" ]; then
+    mkdir -p "$HOME_DIR/.config/chameleon"
+    git clone --depth 1 https://github.com/iustin24/chameleon-wordlists.git \
+        "$HOME_DIR/.config/chameleon/wordlists" 2>/dev/null || true
+fi
+if [ ! -f "$HOME_DIR/.config/chameleon/config.toml" ]; then
+    curl -sL "https://raw.githubusercontent.com/iustin24/chameleon/master/config.toml" \
+        -o "$HOME_DIR/.config/chameleon/config.toml" 2>/dev/null || true
+fi
 
 # Trufflehog (needs clone+build)
 if has_cmd trufflehog; then
