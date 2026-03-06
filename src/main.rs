@@ -9,12 +9,15 @@
 use anyhow::{Context, Result};
 use clap::Parser;
 use colored::*;
+use futures::stream::{self, StreamExt};
 use reqwest::Client;
+use std::collections::{BTreeSet, HashSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 use tokio::process::Command;
+use trust_dns_resolver::TokioAsyncResolver;
 
 // Module declarations
 mod admin_finder;
@@ -38,6 +41,7 @@ mod update_checker;
 
 use metrics::EnumRustMetrics;
 use progress::{EventType, ProgressTracker};
+
 
 /// EnumRust - Advanced Security Reconnaissance Tool
 #[derive(Parser, Debug)]
@@ -464,7 +468,14 @@ async fn main() -> Result<()> {
         // Process multiple domains from file
         println!("{}", format!("[*] Processing domains from file: {}", file_path).cyan().bold());
         process_domains_from_file(file_path, &args).await?;
-    } else if let Some(ref domain) = args.domain {
+    } else if let Some(ref raw_domain) = args.domain {
+        let domain = normalize_domain(raw_domain).unwrap_or_else(|| {
+            eprintln!("{}", "[ERROR] Invalid domain provided in --domain".red().bold());
+            eprintln!("{}", format!("  Input: {}", raw_domain).yellow());
+            eprintln!("{}", "  Use only valid hostnames (e.g. example.com)".yellow());
+            std::process::exit(1);
+        });
+
         // ═══════════════════════════════════════════════════════════════════════════
         // TMUX AUTO-START: Se não estiver em tmux, criar sessão automaticamente
         // ═══════════════════════════════════════════════════════════════════════════
@@ -473,7 +484,7 @@ async fn main() -> Result<()> {
             println!("{}", "   Isso garante que o scan continue mesmo se você desconectar SSH!".cyan());
             println!();
 
-            let session_name = format!("enumrust-{}", domain.replace(".", "-"));
+            let session_name = format!("enumrust-{}", domain.replace('.', "-"));
 
             // Verificar se tmux está instalado
             if !is_tmux_installed() {
@@ -625,7 +636,7 @@ async fn main() -> Result<()> {
         }
         // Run domain scan mode
         println!("{}", format!("[*] Starting domain scan for: {}", domain).green().bold());
-        process_domain(domain, &args).await?;
+        process_domain(&domain, &args).await?;
     } else {
         // No mode specified
         eprintln!("{}", "[ERROR] Please specify --domain or --file".red().bold());
@@ -665,6 +676,32 @@ fn is_tmux_installed() -> bool {
         .output()
         .map(|output| output.status.success())
         .unwrap_or(false)
+}
+
+/// Normalize and validate domain input to avoid command injection and path traversal.
+fn normalize_domain(input: &str) -> Option<String> {
+    let domain = input.trim().trim_end_matches('.').to_lowercase();
+
+    // Basic FQDN constraints
+    if domain.is_empty() || domain.len() > 253 || !domain.contains('.') {
+        return None;
+    }
+
+    for label in domain.split('.') {
+        if label.is_empty() || label.len() > 63 {
+            return None;
+        }
+
+        if label.starts_with('-') || label.ends_with('-') {
+            return None;
+        }
+
+        if !label.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+            return None;
+        }
+    }
+
+    Some(domain)
 }
 
 /// Print application banner
@@ -708,6 +745,7 @@ async fn process_domains_from_file(file_path: &str, args: &Args) -> Result<()> {
 
     // Parse domains
     let mut domains = Vec::new();
+    let mut seen = HashSet::new();
     for (line_num, line) in reader.lines().enumerate() {
         let line = line.context(format!("Failed to read line {} from file", line_num + 1))?;
         let trimmed = line.trim();
@@ -717,7 +755,22 @@ async fn process_domains_from_file(file_path: &str, args: &Args) -> Result<()> {
             continue;
         }
 
-        domains.push(trimmed.to_string());
+        let Some(normalized_domain) = normalize_domain(trimmed) else {
+            eprintln!(
+                "{}",
+                format!(
+                    "[!] Skipping invalid domain at line {}: {}",
+                    line_num + 1,
+                    trimmed
+                )
+                .yellow()
+            );
+            continue;
+        };
+
+        if seen.insert(normalized_domain.clone()) {
+            domains.push(normalized_domain);
+        }
     }
 
     if domains.is_empty() {
@@ -941,8 +994,85 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         println!("{}", "[!] TLSX extraction failed or no certificates found".yellow());
     }
 
+    // Native passive OSINT sources (no external binaries required)
+    progress.tool_started("passive-osint");
+    println!("{}", "[*] Enriching subdomains with native passive sources (crt.sh, bufferover)...".cyan());
+    let passive_candidates = fetch_native_passive_subdomains(&client, domain).await;
+    match passive_candidates {
+        Ok(candidates) => {
+            let mut merged = read_normalized_subdomains(&subdomains_file, domain)?;
+            merged.insert(domain.to_ascii_lowercase());
+            let before = merged.len();
+            for candidate in candidates {
+                if let Some(normalized) = normalize_subdomain_candidate(&candidate, domain) {
+                    merged.insert(normalized);
+                }
+            }
+            write_subdomains_sorted(&subdomains_file, &merged)?;
+            let added = merged.len().saturating_sub(before);
+            progress.tool_completed("passive-osint", 28.0);
+            println!("{}", format!("[+] Native passive sources added {} unique subdomains", added).green());
+        }
+        Err(err) => {
+            progress.tool_failed("passive-osint", &err.to_string(), 28.0);
+            println!("{}", format!("[!] Native passive enrichment failed: {}", err).yellow());
+        }
+    }
+
+    // Archive URL sources (gau/waybackurls) -> host extraction
+    progress.tool_started("archive-osint");
+    println!("{}", "[*] Mining subdomains from historical URL archives (gau, waybackurls)...".cyan());
+    let archive_candidates = collect_archive_subdomain_candidates(domain).await;
+    match archive_candidates {
+        Ok(candidates) => {
+            let mut merged = read_normalized_subdomains(&subdomains_file, domain)?;
+            let before = merged.len();
+            for candidate in candidates {
+                if let Some(normalized) = normalize_subdomain_candidate(&candidate, domain) {
+                    merged.insert(normalized);
+                }
+            }
+            write_subdomains_sorted(&subdomains_file, &merged)?;
+            let added = merged.len().saturating_sub(before);
+            progress.tool_completed("archive-osint", 29.0);
+            println!("{}", format!("[+] Archive sources added {} unique subdomains", added).green());
+        }
+        Err(err) => {
+            progress.tool_failed("archive-osint", &err.to_string(), 29.0);
+            println!("{}", format!("[!] Archive enrichment failed: {}", err).yellow());
+        }
+    }
+
+    // Active DNS bruteforce for high-yield names (full-scan mode only)
+    if args.full_scan {
+        progress.tool_started("dns-bruteforce");
+        println!("{}", "[*] Running DNS bruteforce for common subdomain names...".cyan());
+        match brute_force_common_subdomains(domain, args.workers).await {
+            Ok(found) => {
+                let mut merged = read_normalized_subdomains(&subdomains_file, domain)?;
+                let before = merged.len();
+                for host in found {
+                    merged.insert(host);
+                }
+                write_subdomains_sorted(&subdomains_file, &merged)?;
+                let added = merged.len().saturating_sub(before);
+                progress.tool_completed("dns-bruteforce", 29.5);
+                println!("{}", format!("[+] DNS bruteforce added {} valid subdomains", added).green());
+            }
+            Err(err) => {
+                progress.tool_failed("dns-bruteforce", &err.to_string(), 29.5);
+                println!("{}", format!("[!] DNS bruteforce failed: {}", err).yellow());
+            }
+        }
+    }
+
+    // Final normalization and deduplication pass before DNS resolution
+    let mut final_set = read_normalized_subdomains(&subdomains_file, domain)?;
+    final_set.insert(domain.to_ascii_lowercase());
+    write_subdomains_sorted(&subdomains_file, &final_set)?;
+
     // Count total subdomains found
-    let total_subdomains = count_lines(&subdomains_file)?;
+    let total_subdomains = final_set.len();
     progress.data_found("subdomains", total_subdomains, 30.0);
     println!("{}", format!("[+] Total unique subdomains found: {}", total_subdomains).green().bold());
 
@@ -1319,7 +1449,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         let ffuf_status = Command::new("sh")
             .arg("-c")
             .arg(format!(
-                "ffuf -u {}/FUZZ -w {} -mc 200 -ac -t 50 -s -o {} 2>/dev/null || echo 'ffuf completed'",
+                "ffuf -u {}/FUZZ -w {} -mc 200 -ac -t 50 -s -of json -o {} 2>/dev/null || echo 'ffuf completed'",
                 url.trim_end_matches('/'),
                 js_wordlist_file.display(),
                 ffuf_output.display()
@@ -1330,19 +1460,16 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
         if ffuf_status.success() && ffuf_output.exists() {
             // Parse ffuf JSON output and extract URLs
             if let Ok(content) = fs::read_to_string(&ffuf_output) {
-                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
-                    if let Some(results) = json["results"].as_array() {
-                        let mut ffuf_append = OpenOptions::new()
-                            .create(true)
-                            .append(true)
-                            .open(&ffuf_js_file)?;
+                let ffuf_urls = extract_ffuf_urls(&content);
+                if !ffuf_urls.is_empty() {
+                    let mut ffuf_append = OpenOptions::new()
+                        .create(true)
+                        .append(true)
+                        .open(&ffuf_js_file)?;
 
-                        for result in results {
-                            if let Some(url_found) = result["url"].as_str() {
-                                writeln!(ffuf_append, "{}", url_found)?;
-                                total_js_discovered += 1;
-                            }
-                        }
+                    for url_found in ffuf_urls {
+                        writeln!(ffuf_append, "{}", url_found)?;
+                        total_js_discovered += 1;
                     }
                 }
             }
@@ -2086,11 +2213,7 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     let mut trufflehog_secrets = Vec::new();
     if trufflehog_status.success() && trufflehog_json.exists() {
         if let Ok(content) = fs::read_to_string(&trufflehog_json) {
-            for line in content.lines() {
-                if let Ok(secret) = serde_json::from_str::<serde_json::Value>(line) {
-                    trufflehog_secrets.push(secret);
-                }
-            }
+            trufflehog_secrets = parse_json_objects_from_content(&content);
         }
     }
 
@@ -3048,7 +3171,9 @@ fn generate_consolidated_report(
     for entry in (fs::read_dir(base_path)?).flatten() {
         let path = entry.path();
         if path.is_file() {
-            writeln!(file, "  - {}", path.file_name().unwrap().to_string_lossy())?;
+            if let Some(file_name) = path.file_name() {
+                writeln!(file, "  - {}", file_name.to_string_lossy())?;
+            }
         }
     }
 
@@ -3137,9 +3262,345 @@ fn count_lines(path: &Path) -> Result<usize> {
         return Ok(0);
     }
 
+    let raw = fs::read(path)?;
+    let content = String::from_utf8_lossy(&raw);
+    Ok(content.lines().filter(|line| !line.trim().is_empty()).count())
+}
+
+/// Parse JSON outputs in object-per-line or full JSON formats and return JSON objects.
+fn parse_json_objects_from_content(content: &str) -> Vec<serde_json::Value> {
+    let trimmed = content.trim();
+    if trimmed.is_empty() {
+        return Vec::new();
+    }
+
+    let mut out = Vec::new();
+
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(trimmed) {
+        match value {
+            serde_json::Value::Array(items) => {
+                out.extend(items.into_iter().filter(|item| item.is_object()));
+                return out;
+            }
+            serde_json::Value::Object(_) => {
+                out.push(value);
+                return out;
+            }
+            _ => {}
+        }
+    }
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+
+        if let Ok(value) = serde_json::from_str::<serde_json::Value>(line) {
+            if value.is_object() {
+                out.push(value);
+            }
+        }
+    }
+
+    out
+}
+
+/// Parse FFUF output in JSON or NDJSON variants and extract discovered URLs.
+fn extract_ffuf_urls(content: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+
+    for value in parse_json_objects_from_content(content) {
+        if let Some(results) = value.get("results").and_then(|v| v.as_array()) {
+            for result in results {
+                if let Some(url) = result.get("url").and_then(|u| u.as_str()) {
+                    urls.push(url.to_string());
+                }
+            }
+            continue;
+        }
+
+        if let Some(url) = value.get("url").and_then(|u| u.as_str()) {
+            urls.push(url.to_string());
+        }
+    }
+
+    urls
+}
+
+/// Normalize a candidate hostname and keep only valid entries for target domain
+fn normalize_subdomain_candidate(candidate: &str, domain: &str) -> Option<String> {
+    let mut host = candidate.trim().to_ascii_lowercase();
+    if host.is_empty() {
+        return None;
+    }
+
+    // Remove scheme/path/query/fragment if present
+    if let Some(pos) = host.find("://") {
+        host = host[(pos + 3)..].to_string();
+    }
+    host = host.split('/').next()?.to_string();
+    host = host.split('?').next()?.to_string();
+    host = host.split('#').next()?.to_string();
+    host = host.split_whitespace().next()?.to_string();
+
+    // Strip wildcard prefix and trailing dot
+    host = host.trim_start_matches("*.").trim_end_matches('.').to_string();
+    if host.is_empty() {
+        return None;
+    }
+
+    // Remove trailing :port if present
+    if let Some((left, right)) = host.rsplit_once(':') {
+        if right.chars().all(|c| c.is_ascii_digit()) {
+            host = left.to_string();
+        }
+    }
+
+    // Skip obvious invalid entries
+    if host.contains('*')
+        || host.contains(' ')
+        || host.starts_with('.')
+        || host.ends_with('.')
+        || !host.contains('.')
+    {
+        return None;
+    }
+
+    let target = domain.to_ascii_lowercase();
+    if host == target || host.ends_with(&format!(".{}", target)) {
+        Some(host)
+    } else {
+        None
+    }
+}
+
+/// Read and normalize subdomains file into a unique set
+fn read_normalized_subdomains(path: &Path, domain: &str) -> Result<HashSet<String>> {
+    let mut set = HashSet::new();
+    if !path.exists() {
+        return Ok(set);
+    }
+
     let file = File::open(path)?;
     let reader = BufReader::new(file);
-    Ok(reader.lines().count())
+    for line in reader.lines() {
+        let line = line?;
+        if let Some(normalized) = normalize_subdomain_candidate(&line, domain) {
+            set.insert(normalized);
+        }
+    }
+    Ok(set)
+}
+
+/// Persist subdomains in sorted deterministic order
+fn write_subdomains_sorted(path: &Path, subdomains: &HashSet<String>) -> Result<()> {
+    let sorted: BTreeSet<String> = subdomains.iter().cloned().collect();
+    let mut output = String::new();
+    for host in sorted {
+        output.push_str(&host);
+        output.push('\n');
+    }
+    fs::write(path, output)?;
+    Ok(())
+}
+
+/// Fetch subdomains from native passive sources
+async fn fetch_native_passive_subdomains(client: &Client, domain: &str) -> Result<Vec<String>> {
+    let mut all = Vec::new();
+
+    // crt.sh JSON certificate transparency feed
+    let crt_url = format!("https://crt.sh/?q=%25.{}&output=json", domain);
+    if let Ok(response) = client.get(&crt_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+                    for entry in entries {
+                        if let Some(name_value) = entry.get("name_value").and_then(|v| v.as_str()) {
+                            for item in name_value.lines() {
+                                all.push(item.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // dns.bufferover.run passive DNS feed
+    let buffer_url = format!("https://dns.bufferover.run/dns?q=.{}", domain);
+    if let Ok(response) = client.get(&buffer_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(fdns_a) = json.get("FDNS_A").and_then(|v| v.as_array()) {
+                        for row in fdns_a {
+                            if let Some(value) = row.as_str() {
+                                if let Some((_, host)) = value.split_once(',') {
+                                    all.push(host.to_string());
+                                }
+                            }
+                        }
+                    }
+                    if let Some(rd_ns) = json.get("RDNS").and_then(|v| v.as_array()) {
+                        for row in rd_ns {
+                            if let Some(value) = row.as_str() {
+                                all.push(value.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // CertSpotter certificate transparency API
+    let certspotter_url = format!(
+        "https://api.certspotter.com/v1/issuances?domain={}&include_subdomains=true&expand=dns_names",
+        domain
+    );
+    if let Ok(response) = client.get(&certspotter_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(entries) = serde_json::from_str::<Vec<serde_json::Value>>(&body) {
+                    for entry in entries {
+                        if let Some(dns_names) = entry.get("dns_names").and_then(|v| v.as_array()) {
+                            for dns_name in dns_names {
+                                if let Some(name) = dns_name.as_str() {
+                                    all.push(name.to_string());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // AlienVault OTX passive DNS
+    let otx_url = format!(
+        "https://otx.alienvault.com/api/v1/indicators/domain/{}/passive_dns",
+        domain
+    );
+    if let Ok(response) = client.get(&otx_url).send().await {
+        if response.status().is_success() {
+            if let Ok(body) = response.text().await {
+                if let Ok(json) = serde_json::from_str::<serde_json::Value>(&body) {
+                    if let Some(passive_dns) = json.get("passive_dns").and_then(|v| v.as_array()) {
+                        for record in passive_dns {
+                            if let Some(hostname) = record.get("hostname").and_then(|v| v.as_str()) {
+                                all.push(hostname.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(all)
+}
+
+/// Best-effort extraction of host from a URL-like line.
+fn extract_host_from_url_like(value: &str) -> Option<String> {
+    let raw = value.trim();
+    if raw.is_empty() {
+        return None;
+    }
+
+    // Try as full URL first
+    if let Ok(url) = url::Url::parse(raw) {
+        return url.host_str().map(|h| h.to_ascii_lowercase());
+    }
+
+    // Fallback: parse as host/path by forcing scheme
+    let with_scheme = format!("https://{}", raw.trim_start_matches("//"));
+    if let Ok(url) = url::Url::parse(&with_scheme) {
+        return url.host_str().map(|h| h.to_ascii_lowercase());
+    }
+
+    None
+}
+
+/// Collect additional candidates by mining historical URL providers.
+async fn collect_archive_subdomain_candidates(domain: &str) -> Result<Vec<String>> {
+    let mut out = Vec::new();
+    let mut seen = HashSet::new();
+
+    // gau --subs domain
+    if discover_tool_path("gau").is_some() {
+        let cmd = format!("gau --subs {} 2>/dev/null", domain);
+        if let Ok(output) = Command::new("sh").arg("-c").arg(&cmd).output().await {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if let Some(host) = extract_host_from_url_like(line) {
+                        if seen.insert(host.clone()) {
+                            out.push(host);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // echo domain | waybackurls
+    if discover_tool_path("waybackurls").is_some() {
+        let cmd = format!("echo {} | waybackurls 2>/dev/null", domain);
+        if let Ok(output) = Command::new("sh").arg("-c").arg(&cmd).output().await {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if let Some(host) = extract_host_from_url_like(line) {
+                        if seen.insert(host.clone()) {
+                            out.push(host);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(out)
+}
+
+/// DNS bruteforce of common high-yield subdomain labels.
+async fn brute_force_common_subdomains(domain: &str, workers: usize) -> Result<Vec<String>> {
+    let resolver = TokioAsyncResolver::tokio_from_system_conf()
+        .context("failed to initialize DNS resolver from system config")?;
+
+    let common_labels: &[&str] = &[
+        "www", "api", "app", "admin", "portal", "staging", "dev", "test", "uat", "prod",
+        "auth", "login", "sso", "oauth", "id", "identity", "accounts", "account",
+        "m", "mobile", "cdn", "assets", "static", "media", "img", "images",
+        "files", "download", "uploads", "docs", "help", "support", "status",
+        "mail", "smtp", "imap", "pop", "mx", "webmail", "autodiscover",
+        "vpn", "remote", "rdp", "ssh", "git", "gitlab", "github", "repo",
+        "jenkins", "ci", "grafana", "kibana", "monitor", "metrics",
+        "shop", "store", "checkout", "payment", "payments", "billing",
+        "blog", "news", "forum", "community", "beta", "alpha", "sandbox",
+        "internal", "intranet", "secure", "edge", "origin", "ns1", "ns2",
+    ];
+
+    let concurrency = workers.clamp(10, 200);
+    let labels: Vec<String> = common_labels.iter().map(|s| s.to_string()).collect();
+
+    let found = stream::iter(labels)
+        .map(|label| {
+            let resolver = resolver.clone();
+            let fqdn = format!("{}.{}", label, domain);
+            async move {
+                match tokio::time::timeout(Duration::from_secs(4), resolver.lookup_ip(fqdn.clone())).await {
+                    Ok(Ok(lookup)) if lookup.iter().next().is_some() => Some(fqdn),
+                    _ => None,
+                }
+            }
+        })
+        .buffer_unordered(concurrency)
+        .collect::<Vec<Option<String>>>()
+        .await;
+
+    Ok(found.into_iter().flatten().collect())
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════════
@@ -4059,4 +4520,95 @@ async fn configure_shell_path(gobin: &str) -> bool {
     }
 
     configured
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        extract_ffuf_urls, extract_host_from_url_like, normalize_domain, normalize_subdomain_candidate,
+        parse_json_objects_from_content,
+    };
+
+    #[test]
+    fn normalize_domain_accepts_valid_domains() {
+        assert_eq!(
+            normalize_domain("Example.COM."),
+            Some("example.com".to_string())
+        );
+        assert_eq!(
+            normalize_domain("api.staging.example.co.uk"),
+            Some("api.staging.example.co.uk".to_string())
+        );
+    }
+
+    #[test]
+    fn normalize_domain_rejects_invalid_input() {
+        assert_eq!(normalize_domain(""), None);
+        assert_eq!(normalize_domain("example"), None);
+        assert_eq!(normalize_domain("https://example.com"), None);
+        assert_eq!(normalize_domain("../example.com"), None);
+        assert_eq!(normalize_domain("exa mple.com"), None);
+        assert_eq!(normalize_domain("-bad.example.com"), None);
+        assert_eq!(normalize_domain("bad-.example.com"), None);
+    }
+
+    #[test]
+    fn normalize_subdomain_candidate_handles_common_variants() {
+        assert_eq!(
+            normalize_subdomain_candidate("https://Api.EXAMPLE.com/v1/users", "example.com"),
+            Some("api.example.com".to_string())
+        );
+        assert_eq!(
+            normalize_subdomain_candidate("*.cdn.example.com", "example.com"),
+            Some("cdn.example.com".to_string())
+        );
+        assert_eq!(
+            normalize_subdomain_candidate("other-domain.com", "example.com"),
+            None
+        );
+    }
+
+    #[test]
+    fn extract_host_from_url_like_supports_urls_and_host_paths() {
+        assert_eq!(
+            extract_host_from_url_like("https://sub.example.com/path?a=1"),
+            Some("sub.example.com".to_string())
+        );
+        assert_eq!(
+            extract_host_from_url_like("sub.example.com/path"),
+            Some("sub.example.com".to_string())
+        );
+        assert_eq!(extract_host_from_url_like(""), None);
+    }
+
+    #[test]
+    fn parse_json_objects_from_content_supports_array_and_ndjson() {
+        let array_json = r#"[{"a":1},{"b":2}]"#;
+        let array_items = parse_json_objects_from_content(array_json);
+        assert_eq!(array_items.len(), 2);
+
+        let ndjson = r#"{"x":1}
+{"y":2}
+"#;
+        let ndjson_items = parse_json_objects_from_content(ndjson);
+        assert_eq!(ndjson_items.len(), 2);
+    }
+
+    #[test]
+    fn extract_ffuf_urls_supports_ffuf_json_and_line_json() {
+        let ffuf_json = r#"{
+  "results": [
+    {"url": "https://a.example.com/app.js"},
+    {"url": "https://a.example.com/main.js"}
+  ]
+}"#;
+        let urls = extract_ffuf_urls(ffuf_json);
+        assert_eq!(urls.len(), 2);
+        assert_eq!(urls[0], "https://a.example.com/app.js");
+
+        let ndjson = r#"{"url":"https://b.example.com/vendor.js"}
+{"url":"https://b.example.com/runtime.js"}"#;
+        let line_urls = extract_ffuf_urls(ndjson);
+        assert_eq!(line_urls.len(), 2);
+    }
 }

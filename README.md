@@ -61,7 +61,7 @@
 - **All-Stage Filtering** - AI validates secrets, nuclei findings, admin panels, credentials, and more
 - **Executive Summary** - Generates `ai_executive_summary.txt` with AI-powered analysis
 - **Response Caching** - Up to 5000 cached entries to avoid redundant queries
-- **Custom Model** - Configure via `OLLAMA_MODEL` env var (default: `qwen2.5-coder:32b`)
+- **Custom Model** - Configure via `OLLAMA_MODEL` env var (default: `llama3`)
 
 ### Enhanced HTML Report Generator
 - **Interactive Dashboard** - Full HTML report with charts, filtering, and severity breakdown
