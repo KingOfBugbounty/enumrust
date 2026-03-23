@@ -141,10 +141,35 @@ cd enumrust
 # Build release version
 cargo build --release
 
-# Install tools
-./target/release/enumrust --install-tools
+## Installation
+
+### Clone via GitHub Token (Private Repository)
+
+To clone this repository, you need a GitHub Personal Access Token with `repo` scope.
+
+1. **Generate your token** at [GitHub Settings > Developer settings > Personal access tokens](https://github.com/settings/tokens)
+
+2. **Clone using HTTPS + Token:**
+
+```bash
+git clone https://$YOUR_GITHUB_TOKEN@github.com/ofjaaah-tools/enumrust.git
 ```
 
+Or set the token as an environment variable:
+
+```bash
+export YOUR_GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
+git clone https://${YOUR_GITHUB_TOKEN}@github.com/ofjaaah-tools/enumrust.git
+cd enumrust
+```
+
+3. **Alternative — SSH clone (if you have SSH keys configured):**
+
+```bash
+git clone git@github.com:ofjaaah-tools/enumrust.git
+```
+
+> **Repository URL:** `https://github.com/ofjaaah-tools/enumrust.git`
 ### 2. Basic Scan
 
 ```bash
