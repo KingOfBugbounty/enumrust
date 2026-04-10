@@ -152,14 +152,14 @@ To clone this repository, you need a GitHub Personal Access Token with `repo` sc
 2. **Clone using HTTPS + Token:**
 
 ```bash
-git clone https://$YOUR_GITHUB_TOKEN@github.com/ofjaaah-tools/enumrust.git
+git clone https://$YOUR_GITHUB_TOKEN@github.com/tools-ofjaaah/enumrust.git
 ```
 
 Or set the token as an environment variable:
 
 ```bash
 export YOUR_GITHUB_TOKEN="ghp_xxxxxxxxxxxxxxxxxxxx"
-git clone https://${YOUR_GITHUB_TOKEN}@github.com/ofjaaah-tools/enumrust.git
+git clone https://${YOUR_GITHUB_TOKEN}@github.com/tools-ofjaaah/enumrust.git
 cd enumrust
 ```
 
@@ -169,7 +169,7 @@ cd enumrust
 git clone git@github.com:ofjaaah-tools/enumrust.git
 ```
 
-> **Repository URL:** `https://github.com/ofjaaah-tools/enumrust.git`
+> **Repository URL:** `https://github.com/tools-ofjaaah/enumrust.git`
 ### 2. Basic Scan
 
 ```bash
