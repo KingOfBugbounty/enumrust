@@ -166,7 +166,7 @@ cd enumrust
 3. **Alternative — SSH clone (if you have SSH keys configured):**
 
 ```bash
-git clone git@github.com:ofjaaah-tools/enumrust.git
+git clone git@github.com:tools-ofjaaah/enumrust.git
 ```
 
 > **Repository URL:** `https://github.com/tools-ofjaaah/enumrust.git`
