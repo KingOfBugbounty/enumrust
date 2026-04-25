@@ -1,0 +1,16 @@
+name: Branch Protection
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  protect:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ github.actor }}" != "" ]; then
+            echo "Access denied: only @ can push to main"
+            exit 1
+          fi
+
