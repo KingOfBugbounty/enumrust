@@ -36,6 +36,7 @@ struct OllamaRequest {
     model: String,
     prompt: String,
     stream: bool,
+    think: bool,
     options: OllamaOptions,
 }
 
@@ -229,20 +230,28 @@ impl OllamaClient {
             model: self.model.clone(),
             prompt: "Reply ONLY with: {\"status\":\"ok\"}".to_string(),
             stream: false,
+            think: false,
             options: OllamaOptions {
                 temperature: 0.0,
                 num_predict: 20,
             },
         };
 
-        self.client
+        let response = match self.client
             .post(&url)
             .json(&request)
             .timeout(Duration::from_secs(30))
             .send()
             .await
-            .map(|r| r.status().is_success())
-            .unwrap_or(false)
+        {
+            Ok(r) if r.status().is_success() => r,
+            _ => return false,
+        };
+
+        match response.json::<OllamaResponse>().await {
+            Ok(body) => !body.response.trim().is_empty(),
+            Err(_) => false,
+        }
     }
 
     /// Returns true if Ollama is available for analysis
@@ -278,6 +287,7 @@ impl OllamaClient {
             model: self.model.clone(),
             prompt: prompt.to_string(),
             stream: false,
+            think: false,
             options: OllamaOptions {
                 temperature: 0.1,
                 num_predict: 200,
@@ -713,6 +723,7 @@ Be direct and technical. Focus on exploitability."#,
             model: self.model.clone(),
             prompt,
             stream: false,
+            think: false,
             options: OllamaOptions {
                 temperature: 0.2,
                 num_predict: 600,
@@ -782,6 +793,7 @@ Be direct and technical. No marketing language."#,
             model: self.model.clone(),
             prompt,
             stream: false,
+            think: false,
             options: OllamaOptions {
                 temperature: 0.3,
                 num_predict: 500,
