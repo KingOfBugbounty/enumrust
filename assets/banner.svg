@@ -39,103 +39,110 @@
     <line x1="0" y1="320" x2="800" y2="320" stroke="#0066FF" stroke-width="2" stroke-dasharray="20,10"/>
   </g>
 
-  <!-- Sonic Character (stylized) -->
-  <g transform="translate(80, 140)" filter="url(#shadow)">
+  <!-- Sonic Character (stylized running right) -->
+  <g transform="translate(60, 130)" filter="url(#shadow)">
     <!-- Sonic body -->
-    <ellipse cx="60" cy="100" rx="35" ry="30" fill="url(#sonicBlue)"/>
+    <ellipse cx="70" cy="110" rx="40" ry="32" fill="url(#sonicBlue)"/>
     <!-- Sonic head -->
-    <ellipse cx="85" cy="70" rx="40" ry="35" fill="url(#sonicBlue)"/>
-    <!-- Sonic quills -->
-    <path d="M 85 35 Q 100 20 120 25 Q 105 35 115 45 Q 95 40 85 50" fill="url(#sonicBlue)"/>
-    <path d="M 100 40 Q 115 25 135 30 Q 120 40 130 50 Q 110 45 100 55" fill="url(#sonicBlue)"/>
-    <path d="M 115 50 Q 130 35 150 40 Q 135 50 145 60 Q 125 55 115 65" fill="url(#sonicBlue)"/>
+    <ellipse cx="95" cy="75" rx="42" ry="38" fill="url(#sonicBlue)"/>
+    <!-- Sonic quills (pointing back = running right) -->
+    <path d="M 95 37 Q 75 20 50 25 Q 70 35 60 50 Q 80 45 95 55" fill="url(#sonicBlue)"/>
+    <path d="M 85 42 Q 65 25 40 30 Q 60 40 50 55 Q 70 50 85 60" fill="url(#sonicBlue)"/>
+    <path d="M 75 50 Q 55 35 30 40 Q 50 50 45 65 Q 65 58 75 68" fill="url(#sonicBlue)"/>
     <!-- Sonic face -->
-    <ellipse cx="100" cy="75" rx="25" ry="22" fill="#c5a878"/>
+    <ellipse cx="110" cy="80" rx="28" ry="24" fill="#c5a878"/>
     <!-- Sonic eyes -->
-    <ellipse cx="92" cy="70" rx="8" ry="10" fill="white"/>
-    <ellipse cx="112" cy="70" rx="8" ry="10" fill="white"/>
-    <ellipse cx="94" cy="72" rx="4" ry="5" fill="#003366"/>
-    <ellipse cx="114" cy="72" rx="4" ry="5" fill="#003366"/>
+    <ellipse cx="102" cy="74" rx="9" ry="11" fill="white"/>
+    <ellipse cx="122" cy="74" rx="9" ry="11" fill="white"/>
+    <ellipse cx="104" cy="76" rx="4" ry="5" fill="#003366"/>
+    <ellipse cx="124" cy="76" rx="4" ry="5" fill="#003366"/>
     <!-- Sonic nose -->
-    <ellipse cx="125" cy="80" rx="6" ry="5" fill="#333"/>
+    <ellipse cx="135" cy="86" rx="6" ry="5" fill="#333"/>
     <!-- Sonic smile -->
-    <path d="M 110 88 Q 125 95 135 88" fill="none" stroke="#333" stroke-width="2"/>
+    <path d="M 118 94 Q 135 102 145 94" fill="none" stroke="#333" stroke-width="2"/>
     <!-- Sonic ears -->
-    <ellipse cx="65" cy="50" rx="10" ry="15" fill="url(#sonicBlue)"/>
-    <ellipse cx="65" cy="50" rx="5" ry="8" fill="#c5a878"/>
-    <!-- Sonic legs (running) -->
-    <ellipse cx="45" cy="130" rx="15" ry="10" fill="url(#sonicBlue)"/>
-    <ellipse cx="75" cy="130" rx="15" ry="10" fill="url(#sonicBlue)"/>
-    <!-- Sonic shoes -->
-    <ellipse cx="40" cy="135" rx="12" ry="8" fill="#FF0000"/>
-    <ellipse cx="80" cy="135" rx="12" ry="8" fill="#FF0000"/>
-    <!-- Sonic gloves -->
-    <ellipse cx="30" cy="95" rx="10" ry="8" fill="white"/>
-    <ellipse cx="90" cy="95" rx="10" ry="8" fill="white"/>
+    <ellipse cx="72" cy="52" rx="11" ry="16" fill="url(#sonicBlue)"/>
+    <ellipse cx="72" cy="52" rx="6" ry="9" fill="#c5a878"/>
+    <!-- Sonic legs (running pose) -->
+    <ellipse cx="50" cy="140" rx="18" ry="12" fill="url(#sonicBlue)"/>
+    <ellipse cx="95" cy="140" rx="18" ry="12" fill="url(#sonicBlue)"/>
+    <!-- Sonic shoes (red) -->
+    <ellipse cx="40" cy="148" rx="14" ry="9" fill="#FF0000"/>
+    <ellipse cx="105" cy="148" rx="14" ry="9" fill="#FF0000"/>
+    <!-- Sonic gloves (white) -->
+    <ellipse cx="25" cy="100" rx="12" ry="10" fill="white"/>
+    <ellipse cx="110" cy="100" rx="12" ry="10" fill="white"/>
   </g>
 
-  <!-- "RUN!" text bubble -->
-  <g transform="translate(200, 80)">
-    <ellipse cx="50" cy="30" rx="55" ry="35" fill="white"/>
-    <polygon points="10,50 30,70 25,45" fill="white"/>
-    <text x="50" y="38" font-family="monospace" font-size="28" font-weight="bold" fill="#0066FF" text-anchor="middle">RUN!</text>
+  <!-- "RUN!" speech bubble -->
+  <g transform="translate(220, 70)">
+    <ellipse cx="55" cy="32" rx="60" ry="38" fill="white"/>
+    <polygon points="15,55 35,80 25,48" fill="white"/>
+    <text x="55" y="42" font-family="monospace" font-size="30" font-weight="bold" fill="#0066FF" text-anchor="middle">GOTTA</text>
+    <text x="55" y="68" font-family="monospace" font-size="24" font-weight="bold" fill="#FF0000" text-anchor="middle">SCAN FAST!</text>
   </g>
 
   <!-- Main Title -->
-  <text x="520" y="160" font-family="monospace" font-size="56" font-weight="bold" fill="url(#textGrad)" text-anchor="middle" filter="url(#glow)">
+  <text x="520" y="170" font-family="monospace" font-size="58" font-weight="bold" fill="url(#textGrad)" text-anchor="middle" filter="url(#glow)">
     EnumRust
   </text>
 
   <!-- Subtitle -->
-  <text x="520" y="195" font-family="monospace" font-size="16" fill="#22d3ee" text-anchor="middle">
+  <text x="520" y="205" font-family="monospace" font-size="18" fill="#22d3ee" text-anchor="middle">
     Advanced Security Scanner
   </text>
 
+  <!-- Sub-subtitle -->
+  <text x="520" y="235" font-family="monospace" font-size="13" fill="#9333ea" text-anchor="middle">
+    &amp; Vulnerability Hunter
+  </text>
+
   <!-- Speed indicator -->
-  <g transform="translate(450, 220)">
-    <text font-family="monospace" font-size="24" fill="#0066FF">⚡</text>
-    <text x="30" font-family="monospace" font-size="14" fill="#22d3ee">Maximum Overdrive</text>
+  <g transform="translate(430, 255)">
+    <text font-family="monospace" font-size="28" fill="#0066FF">⚡</text>
+    <text x="35" font-family="monospace" font-size="14" fill="#22d3ee">Maximum Overdrive Mode</text>
   </g>
 
-  <!-- Feature badges -->
-  <g transform="translate(380, 260)">
-    <rect x="0" y="0" width="100" height="28" rx="14" fill="#10b981" opacity="0.2"/>
-    <rect x="0" y="0" width="100" height="28" rx="14" fill="none" stroke="#10b981" stroke-width="1"/>
-    <text x="50" y="18" font-family="monospace" font-size="11" fill="#10b981" text-anchor="middle">Subdomains</text>
+  <!-- Feature badges row 1 -->
+  <g transform="translate(320, 290)">
+    <rect x="0" y="0" width="95" height="26" rx="13" fill="#10b981" opacity="0.25"/>
+    <rect x="0" y="0" width="95" height="26" rx="13" fill="none" stroke="#10b981" stroke-width="1"/>
+    <text x="47" y="17" font-family="monospace" font-size="10" fill="#10b981" text-anchor="middle">Subdomains</text>
 
-    <rect x="110" y="0" width="100" height="28" rx="14" fill="#22d3ee" opacity="0.2"/>
-    <rect x="110" y="0" width="100" height="28" rx="14" fill="none" stroke="#22d3ee" stroke-width="1"/>
-    <text x="160" y="18" font-family="monospace" font-size="11" fill="#22d3ee" text-anchor="middle">Port Scan</text>
+    <rect x="105" y="0" width="95" height="26" rx="13" fill="#22d3ee" opacity="0.25"/>
+    <rect x="105" y="0" width="95" height="26" rx="13" fill="none" stroke="#22d3ee" stroke-width="1"/>
+    <text x="152" y="17" font-family="monospace" font-size="10" fill="#22d3ee" text-anchor="middle">Port Scan</text>
 
-    <rect x="220" y="0" width="100" height="28" rx="14" fill="#ef4444" opacity="0.2"/>
-    <rect x="220" y="0" width="100" height="28" rx="14" fill="none" stroke="#ef4444" stroke-width="1"/>
-    <text x="270" y="18" font-family="monospace" font-size="11" fill="#ef4444" text-anchor="middle">Vuln Scan</text>
+    <rect x="210" y="0" width="95" height="26" rx="13" fill="#ef4444" opacity="0.25"/>
+    <rect x="210" y="0" width="95" height="26" rx="13" fill="none" stroke="#ef4444" stroke-width="1"/>
+    <text x="257" y="17" font-family="monospace" font-size="10" fill="#ef4444" text-anchor="middle">Vuln Scan</text>
   </g>
 
-  <g transform="translate(380, 295)">
-    <rect x="0" y="0" width="100" height="28" rx="14" fill="#f59e0b" opacity="0.2"/>
-    <rect x="0" y="0" width="100" height="28" rx="14" fill="none" stroke="#f59e0b" stroke-width="1"/>
-    <text x="50" y="18" font-family="monospace" font-size="11" fill="#f59e0b" text-anchor="middle">Secrets</text>
+  <!-- Feature badges row 2 -->
+  <g transform="translate(320, 325)">
+    <rect x="0" y="0" width="95" height="26" rx="13" fill="#f59e0b" opacity="0.25"/>
+    <rect x="0" y="0" width="95" height="26" rx="13" fill="none" stroke="#f59e0b" stroke-width="1"/>
+    <text x="47" y="17" font-family="monospace" font-size="10" fill="#f59e0b" text-anchor="middle">Secrets</text>
 
-    <rect x="110" y="0" width="100" height="28" rx="14" fill="#9333ea" opacity="0.2"/>
-    <rect x="110" y="0" width="100" height="28" rx="14" fill="none" stroke="#9333ea" stroke-width="1"/>
-    <text x="160" y="18" font-family="monospace" font-size="11" fill="#9333ea" text-anchor="middle">Dashboard</text>
+    <rect x="105" y="0" width="95" height="26" rx="13" fill="#9333ea" opacity="0.25"/>
+    <rect x="105" y="0" width="95" height="26" rx="13" fill="none" stroke="#9333ea" stroke-width="1"/>
+    <text x="152" y="17" font-family="monospace" font-size="10" fill="#9333ea" text-anchor="middle">Dashboard</text>
 
-    <rect x="220" y="0" width="100" height="28" rx="14" fill="#0066FF" opacity="0.2"/>
-    <rect x="220" y="0" width="100" height="28" rx="14" fill="none" stroke="#0066FF" stroke-width="1"/>
-    <text x="270" y="18" font-family="monospace" font-size="11" fill="#0066FF" text-anchor="middle">MCP Server</text>
+    <rect x="210" y="0" width="95" height="26" rx="13" fill="#0066FF" opacity="0.25"/>
+    <rect x="210" y="0" width="95" height="26" rx="13" fill="none" stroke="#0066FF" stroke-width="1"/>
+    <text x="257" y="17" font-family="monospace" font-size="10" fill="#0066FF" text-anchor="middle">MCP Server</text>
   </g>
 
   <!-- Command example -->
-  <rect x="150" y="350" width="500" height="35" rx="8" fill="#0f0f0f" stroke="#0066FF" stroke-width="1"/>
-  <text x="170" y="373" font-family="monospace" font-size="13" fill="#10b981">$</text>
-  <text x="190" y="373" font-family="monospace" font-size="13" fill="#c5c5c5">./enumrust -d target.com --bugbounty --full-scan</text>
+  <rect x="180" y="365" width="440" height="32" rx="8" fill="#0f0f0f" stroke="#0066FF" stroke-width="1"/>
+  <text x="200" y="386" font-family="monospace" font-size="12" fill="#10b981">$</text>
+  <text x="218" y="386" font-family="monospace" font-size="12" fill="#c5c5c5">./enumrust -d target.com --bugbounty --full-scan</text>
 
-  <!-- Rust + Sonic badge -->
-  <g transform="translate(700, 370)">
-    <text font-family="monospace" font-size="11" fill="#666">🦀 Rust + ⚡ Sonic</text>
+  <!-- Rust badge -->
+  <g transform="translate(700, 375)">
+    <text font-family="monospace" font-size="10" fill="#666">Rust</text>
   </g>
 
   <!-- Author -->
-  <text x="400" y="390" font-family="monospace" font-size="11" fill="#666" text-anchor="middle">by @ofjaaah | Security Scanner</text>
+  <text x="400" y="395" font-family="monospace" font-size="10" fill="#555" text-anchor="middle">by @ofjaaah | Security Scanner</text>
 </svg>
