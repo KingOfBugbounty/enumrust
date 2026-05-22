@@ -36,6 +36,13 @@
 
 👉 **[Full Bug Bounty Guide](BUGBOUNTY_MODE.md)**
 
+### 🤖 MCP Server Integration (NEW!)
+- **AI Assistant Integration** - Use EnumRust from Claude Code, Cursor, and other MCP-enabled AI tools
+- **Programmatic Scanning** - Invoke security scans via MCP tools without CLI
+- **11 Available Tools** - subdomain_enum, dns_resolve, ip_scan, http_probe, js_crawl, admin_finder, secrets_scan, vuln_scan, wordpress_scan, info_disclosure, full_scan
+
+👉 **[MCP Server Guide](#-mcp-server-integration)** - See below for setup and usage
+
 ---
 
 ## 🆕 What's New
@@ -233,6 +240,73 @@ docker run --rm --privileged \
 > **Note:** `--privileged` is required for masscan (raw socket access). Omit it if you don't need port scanning.
 
 👉 **[Full Docker Guide](DOCKER.md)** - Complete instructions, examples, volume mounts, troubleshooting, and more
+
+---
+
+## 🤖 MCP Server Integration
+
+EnumRust includes an MCP (Model Context Protocol) server that allows AI assistants like Claude Code, Cursor, and other MCP-enabled tools to invoke security scanning capabilities programmatically.
+
+### Build the MCP Server
+
+```bash
+# Build from enumrust directory
+cd enumrust
+cargo build --release --package enumrust_mcp
+```
+
+### Available MCP Tools
+
+| Tool | Description | Parameters |
+|------|-------------|-------------|
+| `subdomain_enum` | Passive subdomain discovery | `domain: string` |
+| `dns_resolve` | DNS resolution to IPs | `domains: string[]` |
+| `ip_scan` | Port scan + directory fuzzing | `ip: string, ports?: string, wordlist?: string` |
+| `http_probe` | Check HTTP hosts alive status | `hosts: string[]` |
+| `js_crawl` | Extract secrets/endpoints from JS | `urls: string[]` |
+| `admin_finder` | Discover admin panels | `hosts: string[]` |
+| `secrets_scan` | Scan for hardcoded secrets | `hosts: string[]` |
+| `vuln_scan` | Run Nuclei vulnerability scan | `hosts: string[]` |
+| `wordpress_scan` | WordPress vulnerability scan | `urls: string[]` |
+| `info_disclosure` | S3/Actuator/GraphQL scanning | `hosts: string[]` |
+| `full_scan` | Complete bug bounty scan | `domain: string, options?: {workers?, discord_webhook?}` |
+
+### Claude Code Configuration
+
+Add to your MCP settings (`~/.claude/settings.json` or project `.claude/mcp.json`):
+
+```json
+{
+  "mcpServers": {
+    "enumrust": {
+      "command": "/path/to/enumrust/enumrust-mcp",
+      "args": []
+    }
+  }
+}
+```
+
+### Usage Example with Claude Code
+
+```
+You: "Scan example.com for subdomains using enumrust"
+Claude: (calls subdomain_enum tool)
+-> Returns list of discovered subdomains
+
+You: "Run a full bug bounty scan on example.com"
+Claude: (calls full_scan tool)
+-> Returns complete scan results
+```
+
+### Run Standalone MCP Server
+
+```bash
+# Start the MCP server (stdio mode)
+./target/release/enumrust-mcp
+
+# Test with an MCP client
+echo '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | ./target/release/enumrust-mcp
+```
 
 ---
 

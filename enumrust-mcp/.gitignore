@@ -1,0 +1,5 @@
+# enumrust-mcp specific
+# Keep the binary but ignore build artifacts
+/target/
+**/*.rs.bak
+*.pdb

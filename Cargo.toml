@@ -7,6 +7,9 @@ authors = ["OFJAAAH <ofjaaah@users.noreply.github.com>"]
 repository = "https://github.com/KingOfBugbounty/enumrust"
 license = "MIT"
 
+[workspace]
+members = [".", "enumrust-mcp"]
+
 [dependencies]
 clap = { version = "4.1", features = ["derive"] }
 colored = "2"
@@ -34,4 +37,5 @@ hostname = "0.3"
 num_cpus = "1.16"
 glob = "0.3"
 
-
+[lib]
+path = "src/lib.rs"

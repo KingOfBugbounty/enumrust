@@ -1,0 +1,19 @@
+[package]
+name = "enumrust_mcp"
+version = "0.1.0"
+edition = "2021"
+description = "MCP server for EnumRust security scanner"
+authors = ["OFJAAAH <ofjaaah@users.noreply.github.com>"]
+license = "MIT"
+
+[[bin]]
+name = "enumrust-mcp"
+path = "src/main.rs"
+
+[dependencies]
+rust-mcp-sdk = "0.9"
+async-trait = "0.1"
+tokio = { version = "1", features = ["full"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+anyhow = "1"

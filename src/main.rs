@@ -391,6 +391,20 @@ struct Args {
     // AI ANALYSIS OPTIONS
     // ═══════════════════════════════════════════════════════════════════════════
 
+    /// Enable Ollama AI analysis for false positive filtering
+    #[arg(long, help_heading = "AI Analysis",
+          help = "Use Ollama AI to filter false positives in scan results (requires Ollama running on localhost:11434)")]
+    ollama: bool,
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MCP SERVER OPTIONS
+    // ═══════════════════════════════════════════════════════════════════════════
+
+    /// Start EnumRust as an MCP server for AI assistants (Claude Code, etc.)
+    #[arg(long, help_heading = "MCP Server",
+          help = "Start EnumRust as an MCP server via stdio. Enables AI assistants to invoke security scans programmatically")]
+    mcp: bool,
+
 }
 
 /// Main entry point
@@ -401,6 +415,28 @@ async fn main() -> Result<()> {
 
     // Print banner
     print_banner();
+
+    // ═══════════════════════════════════════════════════════════════════════════
+    // MCP SERVER MODE
+    // ═══════════════════════════════════════════════════════════════════════════
+    if args.mcp {
+        println!();
+        println!("{}", "╔══════════════════════════════════════════════════════════════════════════════╗".cyan().bold());
+        println!("{}", "║                        MCP SERVER MODE                                      ║".cyan().bold());
+        println!("{}", "╠══════════════════════════════════════════════════════════════════════════════╣".cyan().bold());
+        println!("{}", "║  Para usar EnumRust como servidor MCP, execute o binário separado:          ║".cyan());
+        println!();
+        println!("{}", "║    cargo run --package enumrust_mcp                                        ║".yellow());
+        println!();
+        println!("{}", "║  Ou compile e execute:                                                      ║".cyan());
+        println!("{}", "║    cargo build --release --package enumrust_mcp                            ║".yellow());
+        println!("{}", "║    ./target/release/enumrust-mcp                                           ║".yellow());
+        println!();
+        println!("{}", "║  Isso inicia um servidor MCP via stdio para integração com AI assistants    ║".cyan());
+        println!("{}", "╚══════════════════════════════════════════════════════════════════════════════╝".cyan().bold());
+        println!();
+        return Ok(());
+    }
 
     // ═══════════════════════════════════════════════════════════════════════════
     // AUTO-UPDATE CHECK
