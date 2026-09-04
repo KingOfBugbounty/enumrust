@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const GITHUB_API_URL: &str =
-    "https://api.github.com/repos/KingOfBugbounty/enumrust/releases/latest";
+    "https://api.github.com/repos/tools-ofjaaah/enumrust/releases/latest";
 const CACHE_DURATION_SECS: u64 = 86400; // 24 hours
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 

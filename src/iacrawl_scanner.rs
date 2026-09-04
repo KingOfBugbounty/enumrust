@@ -24,7 +24,7 @@ fn find_iacrawl_binary() -> String {
     }
     // 3. Known locations
     let known = [
-        dirs::home_dir().map(|h| format!("{}/PENTEST/IAcrawl/iacrawl/target/release/iacrawl", h.display())).unwrap_or_default(),
+        std::env::var("HOME").map(|h| format!("{}/PENTEST/IAcrawl/iacrawl/target/release/iacrawl", h)).unwrap_or_default(),
         "/root/PENTEST/IAcrawl/iacrawl/target/release/iacrawl".into(),
         "/usr/local/bin/iacrawl".into(),
     ];

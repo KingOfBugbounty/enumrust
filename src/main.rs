@@ -902,10 +902,12 @@ async fn process_domain_impl(domain: &str, args: &Args, base_path: PathBuf) -> R
     println!("{}", format!("[*] Output directory: {}/", base_path.display()).cyan());
     println!("{}", format!("[*] Scan ID: {}", scan_id).cyan());
 
-    // Initialize HTTP client (async)
     let client = Client::builder()
         .timeout(Duration::from_secs(30))
+        .connect_timeout(Duration::from_secs(10))
         .danger_accept_invalid_certs(true)
+        .pool_max_idle_per_host(20)
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
         .build()?;
 
     // Initialize Ollama AI client (auto-installs, auto-starts, auto-pulls model)

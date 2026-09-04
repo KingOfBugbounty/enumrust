@@ -247,10 +247,11 @@ impl ParallelNucleiExecutor {
             let severities = severities.clone();
 
             let handle = tokio::spawn(async move {
-                // Acquire semaphore permit
-                let _permit = semaphore.acquire().await.unwrap();
+                let _permit = match semaphore.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => return 0,
+                };
 
-                // Create batch input file
                 let batch_input = temp_dir.join(format!("batch_{}.txt", batch_idx));
                 let batch_output = temp_dir.join(format!("nuclei_batch_{}.txt", batch_idx));
 
@@ -381,8 +382,31 @@ impl ParallelNucleiExecutor {
 // PARALLEL CLOUD SCANNER
 // ═══════════════════════════════════════════════════════════════════════════
 
+use regex::Regex;
 use reqwest::Client;
 use std::collections::HashSet;
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref CLOUD_URL_PATTERNS: Vec<Regex> = {
+        let patterns = [
+            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3\.amazonaws\.com",
+            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3-[a-z0-9\-]+\.amazonaws\.com",
+            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3\.[a-z0-9\-]+\.amazonaws\.com",
+            r"https?://s3\.amazonaws\.com/[a-z0-9][a-z0-9\-\.]+",
+            r"https?://s3\.[a-z0-9\-]+\.amazonaws\.com/[a-z0-9][a-z0-9\-\.]+",
+            r"https?://[a-z0-9]+\.blob\.core\.windows\.net",
+            r"https?://storage\.googleapis\.com/[a-z0-9][a-z0-9\-_\.]+",
+            r"https?://[a-z0-9][a-z0-9\-_\.]+\.storage\.googleapis\.com",
+            r"https?://[a-z0-9][a-z0-9\-\.]+\.[a-z0-9]+\.digitaloceanspaces\.com",
+            r"https?://f[0-9]+\.backblazeb2\.com/file/[a-z0-9][a-z0-9\-_]+",
+            r"https?://s3\.[a-z0-9\-]+\.wasabisys\.com/[a-z0-9][a-z0-9\-_]+",
+            r"https?://[a-z0-9]+\.cloudfront\.net",
+            r"https?://[a-z0-9][a-z0-9\-\.]+\.r2\.cloudflarestorage\.com",
+        ];
+        patterns.iter().filter_map(|p| regex::Regex::new(p).ok()).collect()
+    };
+}
 
 pub struct ParallelCloudScanner {
     config: ParallelConfig,
@@ -460,9 +484,11 @@ impl ParallelCloudScanner {
             let config = self.config.clone();
 
             let handle = tokio::spawn(async move {
-                let _permit = semaphore.acquire().await.unwrap();
+                let _permit = match semaphore.acquire().await {
+                    Ok(p) => p,
+                    Err(_) => return None,
+                };
 
-                // Rate limiting delay
                 if config.rate_limit > 0 && config.batch_delay_ms > 0 {
                     sleep(Duration::from_millis(config.batch_delay_ms)).await;
                 }
@@ -488,48 +514,15 @@ impl ParallelCloudScanner {
         assets
     }
 
-    /// Extract cloud storage URLs from a list of URLs
+    /// Extract cloud storage URLs from a list of URLs using pre-compiled regexes
     fn extract_cloud_urls(&self, urls: &[String]) -> Vec<String> {
         let mut cloud_urls = HashSet::new();
 
-        let patterns = [
-            // S3
-            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3\.amazonaws\.com",
-            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3-[a-z0-9\-]+\.amazonaws\.com",
-            r"https?://[a-z0-9][a-z0-9\-\.]+\.s3\.[a-z0-9\-]+\.amazonaws\.com",
-            r"https?://s3\.amazonaws\.com/[a-z0-9][a-z0-9\-\.]+",
-            r"https?://s3\.[a-z0-9\-]+\.amazonaws\.com/[a-z0-9][a-z0-9\-\.]+",
-            // Azure
-            r"https?://[a-z0-9]+\.blob\.core\.windows\.net",
-            // GCP
-            r"https?://storage\.googleapis\.com/[a-z0-9][a-z0-9\-_\.]+",
-            r"https?://[a-z0-9][a-z0-9\-_\.]+\.storage\.googleapis\.com",
-            // DigitalOcean Spaces
-            r"https?://[a-z0-9][a-z0-9\-\.]+\.[a-z0-9]+\.digitaloceanspaces\.com",
-            // Backblaze B2
-            r"https?://f[0-9]+\.backblazeb2\.com/file/[a-z0-9][a-z0-9\-_]+",
-            // Wasabi
-            r"https?://s3\.[a-z0-9\-]+\.wasabisys\.com/[a-z0-9][a-z0-9\-_]+",
-            // CloudFront (may point to S3)
-            r"https?://[a-z0-9]+\.cloudfront\.net",
-        ];
-
         for url in urls {
-            for pattern in &patterns {
-                if let Ok(re) = regex::Regex::new(pattern) {
-                    for cap in re.find_iter(url) {
-                        cloud_urls.insert(cap.as_str().to_string());
-                    }
+            for re in CLOUD_URL_PATTERNS.iter() {
+                for cap in re.find_iter(url) {
+                    cloud_urls.insert(cap.as_str().to_string());
                 }
-            }
-        }
-
-        // Also check for common bucket naming patterns
-        for url in urls {
-            if url.contains("s3") || url.contains("bucket") ||
-               url.contains("storage") || url.contains("blob") ||
-               url.contains("cdn") || url.contains("assets") {
-                cloud_urls.insert(url.clone());
             }
         }
 
